@@ -21,8 +21,8 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS and python3 (for validation check)
+RUN apk --no-cache add ca-certificates python3
 
 # Copy API binary from builder
 COPY --from=builder /build/api /app/api
