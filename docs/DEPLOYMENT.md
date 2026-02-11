@@ -4,6 +4,30 @@
 
 This guide covers deploying the DoYou Music Analytics service to your Mac mini (or any production environment) with automatic updates via GitHub Actions and Watchtower.
 
+## Quick Start (TL;DR)
+
+**On Mac mini:**
+```bash
+# 1. Clone and setup
+git clone https://github.com/costuff/do-you-music-analytics.git
+cd do-you-music-analytics
+cp deployments/mac-mini/.env.example .env
+nano .env  # Edit NAS_MUSIC_PATH and passwords
+
+# 2. Start services
+docker-compose -f docker-compose.prod.yml up -d
+
+# 3. Import MP3 files (CRITICAL - do this first!)
+VALIDATE_NAS_ON_STARTUP=false go run ./cmd/import-tracks /Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
+
+# 4. Verify
+docker-compose -f docker-compose.prod.yml logs -f worker
+```
+
+**Auto-updates:** Just `git push` to main - GitHub Actions + Watchtower handle the rest!
+
+---
+
 ## Architecture
 
 ```
@@ -151,7 +175,37 @@ docker-compose -f docker-compose.prod.yml logs -f watchtower
 docker-compose -f docker-compose.prod.yml exec postgres psql -U doyou -d doyou_music -f /docker-entrypoint-initdb.d/001_initial_schema.up.sql
 ```
 
-### 7. Verify Deployment
+### 7. Import MP3 Files to Database
+
+**CRITICAL FIRST STEP:** Before the worker can analyze tracks, you need to import them to the database.
+
+```bash
+# Local development (Mac mini directly)
+VALIDATE_NAS_ON_STARTUP=false go run ./cmd/import-tracks /Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
+
+# Or using Docker (recommended for production)
+docker-compose -f docker-compose.prod.yml run --rm worker \
+  go run ./cmd/import-tracks /mnt/music/downloads
+
+# Expected output:
+# Track Importer v0.4.0
+# Music Dir: /Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
+# Connected to DB
+# Scanning...
+# Found 9875 MP3 files
+# Importing...
+# Done: 9875 imported, 0 skipped, 0 failed
+```
+
+**What it does:**
+- Recursively scans the music directory for `.mp3` files
+- Imports file paths to `tracks` table with `status='pending'`
+- Skips duplicates automatically
+- Uses 10 concurrent goroutines for fast import
+
+**Time estimate:** ~30-60 seconds for 10,000 files
+
+### 8. Verify Deployment
 
 ```bash
 # Check PostgreSQL
@@ -319,6 +373,16 @@ SELECT
   COUNT(*) as total
 FROM tracks;
 "
+
+# Expected after import:
+#  pending | completed | failed | total
+# ---------+-----------+--------+-------
+#     9875 |         0 |      0 |  9875
+
+# After worker runs for a while:
+#  pending | completed | failed | total
+# ---------+-----------+--------+-------
+#     8234 |      1620 |     21 |  9875
 ```
 
 ### Stop All Services
