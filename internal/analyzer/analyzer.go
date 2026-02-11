@@ -48,7 +48,7 @@ func New(pythonPath, scriptPath string, timeout time.Duration) *Analyzer {
 func (a *Analyzer) AnalyzeFile(ctx context.Context, filePath string) (*AudioFeatures, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.analysisTimeout)
 	defer cancel()
-	
+
 	cmd := exec.CommandContext(ctx, a.pythonPath, a.scriptPath, filePath, "--single", "--quiet")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -57,16 +57,16 @@ func (a *Analyzer) AnalyzeFile(ctx context.Context, filePath string) (*AudioFeat
 		}
 		return nil, fmt.Errorf("python execution failed: %w (output: %s)", err, string(output))
 	}
-	
+
 	var features AudioFeatures
 	if err := json.Unmarshal(output, &features); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w (output: %s)", err, string(output))
 	}
-	
+
 	if features.Error != nil {
 		return &features, fmt.Errorf("analysis error: %s", *features.Error)
 	}
-	
+
 	return &features, nil
 }
 

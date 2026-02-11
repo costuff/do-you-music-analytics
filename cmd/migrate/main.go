@@ -156,7 +156,7 @@ func migrateUp(ctx context.Context, conn *pgx.Conn) error {
 
 func migrateDown(ctx context.Context, conn *pgx.Conn) error {
 	query := `SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1`
-	
+
 	var lastVersion string
 	err := conn.QueryRow(ctx, query).Scan(&lastVersion)
 	if err != nil {
@@ -211,7 +211,7 @@ func showStatus(ctx context.Context, conn *pgx.Conn) error {
 		SELECT FROM information_schema.tables 
 		WHERE table_name = 'schema_migrations'
 	)`
-	
+
 	var tableExists bool
 	err := conn.QueryRow(ctx, checkQuery).Scan(&tableExists)
 	if err != nil {

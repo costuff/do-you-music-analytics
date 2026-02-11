@@ -1,0 +1,60 @@
+# Build stage
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build worker binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-extldflags "-static"' -o worker ./cmd/worker
+
+# Runtime stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python requirements and install
+COPY scripts/requirements.txt ./scripts/
+RUN pip install --no-cache-dir -r scripts/requirements.txt
+
+# Copy Python analysis script
+COPY scripts/analyze_audio.py ./scripts/
+
+# Copy worker binary from builder
+COPY --from=builder /build/worker /app/worker
+
+# Copy migrations
+COPY migrations ./migrations
+
+# Create directory for NAS mount point
+RUN mkdir -p /mnt/music/downloads
+
+# Set environment variables
+ENV PYTHON_PATH=/usr/local/bin/python3 \
+    ANALYSIS_SCRIPT=/app/scripts/analyze_audio.py \
+    MUSIC_DIR=/mnt/music/downloads
+
+# Run as non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD pgrep -x worker > /dev/null || exit 1
+
+CMD ["/app/worker"]

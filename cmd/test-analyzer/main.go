@@ -61,7 +61,7 @@ func main() {
 	fmt.Println("Analyzing (this may take 30-60s)...")
 
 	database.UpdateTrackStatus(ctx, trackID, "analyzing", nil)
-	
+
 	features, err := a.AnalyzeFile(ctx, audioFile)
 	if err != nil {
 		errMsg := err.Error()
