@@ -1,14 +1,21 @@
 package main
 
 import (
-"context"
-"fmt"
-"os"
-"path/filepath"
-"strings"
-"sync"
-"sync/atomic"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 
+	"github.com/costuff/doyou-music-analytics/internal/config"
+	"github.com/costuff/doyou-music-analytics/internal/db"
+	"github.com/costuff/doyou-music-analytics/pkg/logger"
+)
+
+func main() {
+	log := logger.New("info")
 	version := getVersion()
 	log.Info(fmt.Sprintf("Track Importer v%s", version))
 	
