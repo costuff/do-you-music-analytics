@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: doyou-analytics-db
+    environment:
+      POSTGRES_DB: doyou_music
+      POSTGRES_USER: doyou
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doyou"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Uncomment when worker is implemented
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: doyou-analytics-worker
+  #   environment:
+  #     DATABASE_URL: postgresql://doyou:${DB_PASSWORD:-dev_password_change_me}@postgres:5432/doyou_music
+  #     NAS_MOUNT_PATH: /mnt/music/downloads
+  #     BATCH_SIZE: ${BATCH_SIZE:-10}
+  #     MAX_WORKERS: ${MAX_WORKERS:-4}
+  #     LOG_LEVEL: ${LOG_LEVEL:-info}
+  #   volumes:
+  #     - ${NAS_PATH:-/mnt/music}:/mnt/music:ro
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+  # Uncomment when API is implemented
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: doyou-analytics-api
+  #   command: /app/api
+  #   environment:
+  #     DATABASE_URL: postgresql://doyou:${DB_PASSWORD:-dev_password_change_me}@postgres:5432/doyou_music
+  #     API_PORT: 4000
+  #     LOG_LEVEL: ${LOG_LEVEL:-info}
+  #     CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+  #   ports:
+  #     - "${API_PORT:-4000}:4000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
