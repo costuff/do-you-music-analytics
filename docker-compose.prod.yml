@@ -70,10 +70,17 @@ services:
       # API Configuration
       PORT: ${API_PORT:-8080}
       
+      # Disable worker-specific validations
+      VALIDATE_PYTHON: "false"
+      VALIDATE_NAS_ON_STARTUP: "false"
+      
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${API_PORT:-8080}:8080"
+    volumes:
+      # Mount NAS music directory (read-only) for validation
+      - ${NAS_MUSIC_PATH}:/mnt/music/downloads:ro
     networks:
       - doyou-network
     labels:
@@ -81,7 +88,7 @@ services:
 
   # Watchtower - Auto-update containers on new images
   watchtower:
-    image: containrrr/watchtower
+    image: containrrr/watchtower:latest
     container_name: doyou-watchtower
     restart: unless-stopped
     environment:
@@ -92,6 +99,7 @@ services:
       WATCHTOWER_ROLLING_RESTART: "true"
       WATCHTOWER_NOTIFICATIONS: ${WATCHTOWER_NOTIFICATIONS:-}
       WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
+      DOCKER_API_VERSION: "1.44"  # Force newer API version
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ~/.docker/config.json:/config.json:ro  # For authenticated pulls
