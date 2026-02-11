@@ -3,66 +3,248 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 
+	"github.com/costuff/doyou-music-analytics/internal/analyzer"
 	"github.com/costuff/doyou-music-analytics/internal/config"
 	"github.com/costuff/doyou-music-analytics/internal/db"
+	"github.com/costuff/doyou-music-analytics/pkg/logger"
 )
 
-const version = "0.1.0"
-
 func main() {
-	fmt.Printf("DoYou Music Analytics Worker v%s\n", version)
-	fmt.Println("=====================================\n")
+	// Initialize logger
+	log := logger.New("info")
+	
+	version := getVersion()
+	log.Info(fmt.Sprintf("🚀 DoYou Music Analytics Worker v%s", version))
+	log.Info("=====================================")
 
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		log.Fatal(fmt.Sprintf("Failed to load configuration: %v", err))
 	}
 
-	fmt.Println("✅ Configuration loaded")
-	fmt.Printf("   Database: %s\n", cfg.MaskPassword())
-	fmt.Printf("   NAS Mount: %s\n", cfg.NASMountPath)
-	fmt.Printf("   Batch Size: %d\n", cfg.BatchSize)
-	fmt.Printf("   Max Workers: %d\n\n", cfg.MaxWorkers)
+	log.Info("✅ Configuration loaded")
+	log.Info(fmt.Sprintf("   Database: %s", cfg.MaskPassword()))
+	log.Info(fmt.Sprintf("   Music Directory: %s", cfg.NASMountPath))
+	log.Info(fmt.Sprintf("   Batch Size: %d", cfg.BatchSize))
+	log.Info(fmt.Sprintf("   Max Workers: %d", cfg.MaxWorkers))
 
 	// Connect to database
 	ctx := context.Background()
 	database, err := db.Connect(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.Fatal(fmt.Sprintf("Failed to connect to database: %v", err))
 	}
 	defer database.Close()
 
-	fmt.Println("✅ Connected to PostgreSQL")
+	log.Info("✅ Connected to PostgreSQL")
 
-	// Get track statistics
+	// Initialize analyzer
+	analyzerTimeout, err := time.ParseDuration(cfg.AnalysisTimeout)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Invalid analysis timeout: %v", err))
+	}
+
+	anlz := analyzer.New(cfg.PythonPath, cfg.AnalysisScript, analyzerTimeout)
+	if err := anlz.Validate(); err != nil {
+		log.Fatal(fmt.Sprintf("Analyzer validation failed: %v", err))
+	}
+
+	log.Info("✅ Analyzer initialized")
+
+	// Get initial statistics
 	stats, err := database.GetTrackStats(ctx)
 	if err != nil {
-		log.Fatalf("Failed to get track statistics: %v", err)
+		log.Fatal(fmt.Sprintf("Failed to get track statistics: %v", err))
 	}
 
-	fmt.Println("\n📊 Track Statistics:")
-	fmt.Printf("   Total: %d\n", stats["total"])
-	fmt.Printf("   Pending: %d\n", stats["pending"])
-	fmt.Printf("   Completed: %d\n", stats["completed"])
-	fmt.Printf("   Failed: %d\n", stats["failed"])
+	log.Info("📊 Initial Track Statistics:")
+	log.Info(fmt.Sprintf("   Total: %d", stats["total"]))
+	log.Info(fmt.Sprintf("   Pending: %d", stats["pending"]))
+	log.Info(fmt.Sprintf("   Completed: %d", stats["completed"]))
+	log.Info(fmt.Sprintf("   Failed: %d", stats["failed"]))
 
-	// Get pending tracks count
-	pending, err := database.GetPendingTracks(ctx, 5)
+	// Check if there are tracks to process
+	if stats["pending"] == 0 && stats["total"] == 0 {
+		log.Info("⚠️  No tracks found in database. Please import MP3 files first.")
+		log.Info("💡 Run: go run cmd/import-tracks to scan and import from music directory")
+		return
+	}
+
+	if stats["pending"] == 0 {
+		log.Info("✅ All tracks already processed!")
+		return
+	}
+
+	// Setup graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithCancel(ctx)
+	defer shutdownCancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start worker pool
+	log.Info(fmt.Sprintf("🔄 Starting worker pool with %d workers...", cfg.MaxWorkers))
+	
+	var wg sync.WaitGroup
+	var processed, failed atomic.Int64
+	startTime := time.Now()
+
+	workerFunc := func(workerID int) {
+		defer wg.Done()
+		
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				log.Info(fmt.Sprintf("Worker %d shutting down gracefully", workerID))
+				return
+			default:
+				// Get next pending track
+				tracks, err := database.GetPendingTracks(shutdownCtx, 1)
+				if err != nil {
+					log.Error(fmt.Sprintf("Worker %d: Failed to get pending track: %v", workerID, err))
+					time.Sleep(5 * time.Second)
+					continue
+				}
+
+				if len(tracks) == 0 {
+					// No more tracks, exit worker
+					return
+				}
+
+				track := tracks[0]
+				
+				// Update status to analyzing
+				if err := database.UpdateTrackStatus(shutdownCtx, track.ID, "analyzing", nil); err != nil {
+					log.Error(fmt.Sprintf("Worker %d: Failed to update track status: %v", workerID, err))
+					continue
+				}
+
+				// Build full file path
+				filePath := filepath.Join(cfg.NASMountPath, track.FilePath)
+				
+				// Analyze track
+				log.Info(fmt.Sprintf("Worker %d: Analyzing [%d] %s", workerID, track.ID, track.FilePath))
+				
+				features, err := anlz.AnalyzeFile(shutdownCtx, filePath)
+				if err != nil {
+					errMsg := err.Error()
+					log.Error(fmt.Sprintf("Worker %d: Analysis failed for %s: %v", workerID, track.FilePath, err))
+					_ = database.UpdateTrackStatus(shutdownCtx, track.ID, "failed", &errMsg)
+					failed.Add(1)
+					continue
+				}
+
+				// Convert analyzer features to database features
+				dbFeatures := &db.AudioFeatures{
+					TrackID:          track.ID,
+					BPM:              features.BPM,
+					Key:              features.Key,
+					DurationSeconds:  &features.DurationSeconds,
+					Energy:           features.Energy,
+					Danceability:     features.Danceability,
+					Valence:          features.Valence,
+					Acousticness:     features.Acousticness,
+					Instrumentalness: features.Instrumentalness,
+					Speechiness:      features.Speechiness,
+					Liveness:         features.Liveness,
+					Melodicness:      features.Melodicness,
+					LoudnessDB:       features.LoudnessDB,
+					AnalysisVersion:  "1.0",
+				}
+
+				// Save features to database
+				if err := database.SaveAudioFeatures(shutdownCtx, dbFeatures); err != nil {
+					errMsg := fmt.Sprintf("Failed to save features: %v", err)
+					log.Error(fmt.Sprintf("Worker %d: %s", workerID, errMsg))
+					_ = database.UpdateTrackStatus(shutdownCtx, track.ID, "failed", &errMsg)
+					failed.Add(1)
+					continue
+				}
+
+				// Update status to completed
+				if err := database.UpdateTrackStatus(shutdownCtx, track.ID, "completed", nil); err != nil {
+					log.Error(fmt.Sprintf("Worker %d: Failed to update completion status: %v", workerID, err))
+					continue
+				}
+
+				processed.Add(1)
+				
+				// Log progress every 10 tracks
+				if processed.Load()%10 == 0 {
+					elapsed := time.Since(startTime)
+					rate := float64(processed.Load()) / elapsed.Seconds() * 60 // per minute
+					remaining := stats["pending"] - int(processed.Load())
+					eta := time.Duration(float64(remaining)/rate) * time.Minute
+					
+					log.Info(fmt.Sprintf("📊 Progress: %d/%d completed, %d failed | Rate: %.1f/min | ETA: %v", 
+						processed.Load(), stats["pending"], failed.Load(), rate, eta.Round(time.Minute)))
+				}
+			}
+		}
+	}
+
+	// Start workers
+	for i := 1; i <= cfg.MaxWorkers; i++ {
+		wg.Add(1)
+		go workerFunc(i)
+	}
+
+	// Wait for shutdown signal or workers to complete
+	go func() {
+		wg.Wait()
+		shutdownCancel()
+	}()
+
+	select {
+	case sig := <-sigChan:
+		log.Info(fmt.Sprintf("⚠️  Received signal: %v", sig))
+		log.Info("🛑 Initiating graceful shutdown...")
+		shutdownCancel()
+	case <-shutdownCtx.Done():
+		// Workers completed naturally
+	}
+
+	// Wait for all workers with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Info("✅ All workers stopped gracefully")
+	case <-time.After(30 * time.Second):
+		log.Warn("⚠️  Timeout waiting for workers, forcing shutdown")
+	}
+
+	// Final statistics
+	elapsed := time.Since(startTime)
+	log.Info("📊 Final Statistics:")
+	log.Info(fmt.Sprintf("   Processed: %d tracks", processed.Load()))
+	log.Info(fmt.Sprintf("   Failed: %d tracks", failed.Load()))
+	log.Info(fmt.Sprintf("   Duration: %v", elapsed.Round(time.Second)))
+	if processed.Load() > 0 {
+		avgTime := elapsed / time.Duration(processed.Load())
+		log.Info(fmt.Sprintf("   Average: %v per track", avgTime.Round(time.Second)))
+	}
+
+	log.Info("👋 Worker shutdown complete")
+}
+
+func getVersion() string {
+	version, err := os.ReadFile("VERSION")
 	if err != nil {
-		log.Fatalf("Failed to get pending tracks: %v", err)
+		return "unknown"
 	}
-
-	fmt.Printf("\n📋 Sample pending tracks: %d found\n", len(pending))
-
-	fmt.Println("\n✅ Phase 2 Complete: Database integration working!")
-	fmt.Println("\n📝 Next steps:")
-	fmt.Println("   1. ✅ PostgreSQL connected")
-	fmt.Println("   2. ✅ Migrations applied")
-	fmt.Println("   3. ✅ Database operations working")
-	fmt.Println("   4. Implement analyzer (Go ↔ Python bridge)")
-	fmt.Println("   5. Implement worker loop (batch processing)")
-	fmt.Println("\n📖 See docs/ANALYTICS_ARCHITECTURE.md for details")
+	return string(version)
 }
