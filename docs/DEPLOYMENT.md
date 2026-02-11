@@ -6,7 +6,7 @@ This guide covers deploying the DoYou Music Analytics service to your Mac mini (
 
 ## Quick Start (TL;DR)
 
-**On Mac mini:**
+**On Mac mini (Watchtower already configured ✅):**
 ```bash
 # 1. Clone and setup
 git clone https://github.com/costuff/do-you-music-analytics.git
@@ -14,8 +14,8 @@ cd do-you-music-analytics
 cp deployments/mac-mini/.env.example .env
 nano .env  # Edit NAS_MUSIC_PATH and passwords
 
-# 2. Start services
-docker-compose -f docker-compose.prod.yml up -d
+# 2. Start services (skip postgres if already running)
+docker-compose -f docker-compose.prod.yml up -d worker api
 
 # 3. Import MP3 files (CRITICAL - do this first!)
 VALIDATE_NAS_ON_STARTUP=false go run ./cmd/import-tracks /Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
@@ -24,7 +24,7 @@ VALIDATE_NAS_ON_STARTUP=false go run ./cmd/import-tracks /Volumes/ExtHDD-8TB/Mus
 docker-compose -f docker-compose.prod.yml logs -f worker
 ```
 
-**Auto-updates:** Just `git push` to main - GitHub Actions + Watchtower handle the rest!
+**Auto-updates:** Just `git push` to main - GitHub Actions builds images, Watchtower pulls and restarts automatically!
 
 ---
 
@@ -70,13 +70,15 @@ docker-compose -f docker-compose.prod.yml logs -f worker
 
 1. **Developer pushes code** → GitHub
 2. **GitHub Actions** builds Docker images, pushes to `ghcr.io`
-3. **Watchtower** on Mac mini detects new images
+3. **Watchtower** (already running on Mac mini) detects new images
 4. **Watchtower** pulls and restarts containers automatically
 5. **Zero downtime** - rolling restarts with health checks
 
 ---
 
 ## Initial Setup on Mac Mini
+
+> **Note:** Watchtower is already configured on your Mac mini! You only need to set up the analytics services.
 
 ### 1. Prerequisites
 
@@ -156,8 +158,8 @@ docker pull ghcr.io/costuff/do-you-music-analytics-worker:latest
 ### 5. Start Services
 
 ```bash
-# Start all services
-docker-compose -f docker-compose.prod.yml up -d
+# Start analytics services (Watchtower already running)
+docker-compose -f docker-compose.prod.yml up -d postgres worker api
 
 # Check status
 docker-compose -f docker-compose.prod.yml ps
@@ -165,8 +167,9 @@ docker-compose -f docker-compose.prod.yml ps
 # View logs
 docker-compose -f docker-compose.prod.yml logs -f worker
 docker-compose -f docker-compose.prod.yml logs -f api
-docker-compose -f docker-compose.prod.yml logs -f watchtower
 ```
+
+> **Note:** Watchtower is already running on your Mac mini - no need to start it separately.
 
 ### 6. Run Initial Migration
 
@@ -240,7 +243,10 @@ curl http://localhost:8080/health
 ### Monitoring Updates
 
 ```bash
-# Watch Watchtower logs
+# Watch Watchtower logs (running separately on Mac mini)
+docker logs -f watchtower
+
+# Or if Watchtower is in the compose stack:
 docker-compose -f docker-compose.prod.yml logs -f watchtower
 
 # Check current image versions
@@ -310,15 +316,20 @@ docker-compose -f docker-compose.prod.yml exec worker python3 -c "import librosa
 
 ### Watchtower Not Updating
 
+> **Note:** Watchtower is running separately on your Mac mini, not in the docker-compose stack.
+
 ```bash
-# Check authentication
-docker-compose -f docker-compose.prod.yml exec watchtower cat /config.json
+# Check Watchtower container status
+docker ps | grep watchtower
 
-# Force update check
-docker-compose -f docker-compose.prod.yml restart watchtower
+# View Watchtower logs
+docker logs watchtower --tail 50
 
-# View debug logs
-docker-compose -f docker-compose.prod.yml logs watchtower | grep -i update
+# Force update check (if you have access to restart it)
+docker restart watchtower
+
+# View recent update activity
+docker logs watchtower | grep -i "Found new" | tail -10
 ```
 
 ### Database Connection Issues
