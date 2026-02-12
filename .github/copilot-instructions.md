@@ -111,12 +111,39 @@ doyou-music-analytics/
 
 ## API Endpoints
 - `GET /health` - Health check (API + database connection)
-- `GET /tracks` - List all tracks (paginated, default 100 per page)
-- `GET /tracks/:id` - Get single track with audio features
-- `GET /tracks/search?q=query` - Search tracks by title/artist/album
-- `GET /stats` - Get analysis statistics
+- `GET /api/v1/stats` - Get analysis statistics (track counts by status)
+- `GET /api/v1/stats/detailed` - Get detailed statistics (includes processing metrics)
+- `GET /api/v1/tracks` - List all tracks (paginated, default 50 per page, supports `?limit=100&offset=0&status=completed`)
+- `GET /api/v1/tracks/:id` - Get single track with audio features
+- `GET /api/v1/tracks/search?q=query` - Search tracks by title/artist/album
+- `GET /api/v1/tracks/failed?limit=50` - Get failed tracks with error messages
 
-**Response Format:**
+**Stats Response (`/api/v1/stats`):**
+```json
+{
+  "total": 9875,
+  "pending": 8234,
+  "analyzing": 4,
+  "completed": 1620,
+  "failed": 17
+}
+```
+
+**Detailed Stats Response (`/api/v1/stats/detailed`):**
+```json
+{
+  "total": 9875,
+  "pending": 8234,
+  "analyzing": 4,
+  "completed": 1620,
+  "failed": 17,
+  "avg_processing_time_sec": "2.34",
+  "tracks_per_hour": "256.78",
+  "completion_percentage": "16.40"
+}
+```
+
+**Track Response Format:**
 ```json
 {
   "id": 123,

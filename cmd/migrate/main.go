@@ -18,7 +18,7 @@ const version = "0.1.0"
 
 func main() {
 	fmt.Printf("DoYou Music Analytics - Database Migration Tool v%s\n", version)
-	fmt.Println("========================================================\n")
+	fmt.Println("========================================================")
 
 	if len(os.Args) < 2 {
 		printUsage()

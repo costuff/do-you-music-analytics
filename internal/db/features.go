@@ -8,20 +8,20 @@ import (
 
 // AudioFeatures represents audio analysis results
 type AudioFeatures struct {
-	TrackID          int
-	BPM              *float64
-	Key              *string
-	DurationSeconds  *float64
-	Energy           *float64
-	Danceability     *float64
-	Valence          *float64
-	Acousticness     *float64
-	Instrumentalness *float64
-	Speechiness      *float64
-	Liveness         *float64
-	Melodicness      *float64
-	LoudnessDB       *float64
-	AnalysisVersion  string
+	TrackID          int       `json:"track_id"`
+	BPM              *float64  `json:"bpm"`
+	Key              *string   `json:"key"`
+	DurationSeconds  *float64  `json:"duration_seconds"`
+	Energy           *float64  `json:"energy"`
+	Danceability     *float64  `json:"danceability"`
+	Valence          *float64  `json:"valence"`
+	Acousticness     *float64  `json:"acousticness"`
+	Instrumentalness *float64  `json:"instrumentalness"`
+	Speechiness      *float64  `json:"speechiness"`
+	Liveness         *float64  `json:"liveness"`
+	Melodicness      *float64  `json:"melodicness"`
+	LoudnessDB       *float64  `json:"loudness_db"`
+	AnalysisVersion  string    `json:"analysis_version,omitempty"`
 }
 
 // SaveAudioFeatures inserts or updates audio features for a track
