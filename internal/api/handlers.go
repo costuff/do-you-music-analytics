@@ -167,8 +167,8 @@ func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) 
 		"total": stats["total"], "pending": stats["pending"], "analyzing": stats["analyzing"],
 		"completed": stats["completed"], "failed": stats["failed"],
 		"avg_processing_time_sec": fmt.Sprintf("%.2f", avgProcessingTime),
-		"tracks_per_hour": fmt.Sprintf("%.2f", tracksPerHour),
-		"completion_percentage": "0.00",
+		"tracks_per_hour":         fmt.Sprintf("%.2f", tracksPerHour),
+		"completion_percentage":   "0.00",
 	}
 	if stats["total"] > 0 {
 		completionPct := float64(stats["completed"]) / float64(stats["total"]) * 100

@@ -30,8 +30,8 @@ func TestJSON(t *testing.T) {
 			validateJSON:   true,
 		},
 		{
-			name:           "handles complex nested data",
-			status:         http.StatusOK,
+			name:   "handles complex nested data",
+			status: http.StatusOK,
 			data: map[string]interface{}{
 				"tracks": []map[string]interface{}{
 					{"id": 1, "name": "track1"},

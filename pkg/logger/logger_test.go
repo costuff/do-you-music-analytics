@@ -31,7 +31,7 @@ func TestParseLogLevel(t *testing.T) {
 		{"error", zerolog.ErrorLevel},
 		{"invalid", zerolog.InfoLevel},
 	}
-	
+
 	for _, tt := range tests {
 		got := parseLogLevel(tt.input)
 		if got != tt.want {
@@ -42,7 +42,7 @@ func TestParseLogLevel(t *testing.T) {
 
 func TestLoggingMethods(t *testing.T) {
 	logger := New("debug")
-	
+
 	// These should not panic
 	logger.Debug("debug msg")
 	logger.Info("info msg")

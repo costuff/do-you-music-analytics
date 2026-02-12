@@ -82,12 +82,12 @@ func TestLoggingMiddleware(t *testing.T) {
 	log := logger.New("info")
 
 	tests := []struct {
-		name             string
-		method           string
-		path             string
-		handlerStatus    int
-		handlerBody      string
-		expectLogging    bool
+		name          string
+		method        string
+		path          string
+		handlerStatus int
+		handlerBody   string
+		expectLogging bool
 	}{
 		{
 			name:          "logs GET request with 200 status",
@@ -156,18 +156,18 @@ func TestLoggingMiddleware_CapturesStatusCode(t *testing.T) {
 	log := logger.New("info")
 
 	tests := []struct {
-		name           string
-		handlerStatus  int
+		name              string
+		handlerStatus     int
 		writeBeforeStatus bool
 	}{
 		{
-			name:           "captures status when WriteHeader called explicitly",
-			handlerStatus:  http.StatusCreated,
+			name:              "captures status when WriteHeader called explicitly",
+			handlerStatus:     http.StatusCreated,
 			writeBeforeStatus: false,
 		},
 		{
-			name:           "captures status when Write called without WriteHeader",
-			handlerStatus:  http.StatusOK,
+			name:              "captures status when Write called without WriteHeader",
+			handlerStatus:     http.StatusOK,
 			writeBeforeStatus: true,
 		},
 	}

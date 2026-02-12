@@ -46,10 +46,10 @@ func main() {
 
 	// Setup routes
 	mux := http.NewServeMux()
-	
+
 	// Health check
 	mux.HandleFunc("/health", handlers.HealthHandler)
-	
+
 	// API v1 routes
 	mux.HandleFunc("/api/v1/stats", handlers.StatsHandler)
 	mux.HandleFunc("/api/v1/stats/detailed", handlers.DetailedStatsHandler)
@@ -102,19 +102,19 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is /api/v1/tracks/:id or /api/v1/tracks/search or /api/v1/tracks/failed
 		path := strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/")
-		
+
 		// If path is empty or has query params, it's the list endpoint
 		if path == "" || r.URL.RawQuery != "" {
 			handlers.ListTracksHandler(w, r)
 			return
 		}
-		
+
 		// If path is "search" or "failed", those are handled by specific routes
 		if path == "search" || path == "failed" {
 			http.NotFound(w, r)
 			return
 		}
-		
+
 		// Otherwise it's a track ID
 		handlers.GetTrackHandler(w, r)
 	}

@@ -18,40 +18,40 @@ func main() {
 	log := logger.New("info")
 	version := getVersion()
 	log.Info(fmt.Sprintf("Track Importer v%s", version))
-	
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(fmt.Sprintf("Failed: %v", err))
 	}
-	
+
 	musicDir := cfg.NASMountPath
 	if len(os.Args) > 1 {
 		musicDir = os.Args[1]
 	}
-	
+
 	log.Info(fmt.Sprintf("Music Dir: %s", musicDir))
-	
+
 	ctx := context.Background()
 	database, err := db.Connect(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("DB Failed: %v", err))
 	}
 	defer database.Close()
-	
+
 	log.Info("Connected to DB")
 	log.Info("Scanning...")
-	
+
 	mp3Files, err := findMP3Files(musicDir)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("Scan failed: %v", err))
 	}
-	
+
 	log.Info(fmt.Sprintf("Found %d MP3 files", len(mp3Files)))
-	
+
 	if len(mp3Files) == 0 {
 		return
 	}
-	
+
 	log.Info("Importing...")
 	imported, skipped, failed := importTracks(ctx, database, musicDir, mp3Files, log)
 	log.Info(fmt.Sprintf("Done: %d imported, %d skipped, %d failed", imported, skipped, failed))
@@ -60,10 +60,10 @@ func main() {
 func findMP3Files(rootDir string) ([]string, error) {
 	var files []string
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-if err != nil {
-return nil
-}
-if strings.HasPrefix(info.Name(), ".") {
+		if err != nil {
+			return nil
+		}
+		if strings.HasPrefix(info.Name(), ".") {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -81,23 +81,23 @@ func importTracks(ctx context.Context, database *db.DB, baseDir string, files []
 	var importedCount, skippedCount, failedCount atomic.Int64
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10)
-	
+
 	for _, filePath := range files {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(path string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			
+
 			relPath, _ := filepath.Rel(baseDir, path)
 			fileName := filepath.Base(path)
-			
+
 			existing, _ := database.GetTrackByPath(ctx, relPath)
 			if existing != nil {
 				skippedCount.Add(1)
 				return
 			}
-			
+
 			_, err := database.CreateTrack(ctx, relPath, fileName)
 			if err != nil {
 				if strings.Contains(err.Error(), "duplicate") {
@@ -107,11 +107,11 @@ func importTracks(ctx context.Context, database *db.DB, baseDir string, files []
 				failedCount.Add(1)
 				return
 			}
-			
+
 			importedCount.Add(1)
 		}(filePath)
 	}
-	
+
 	wg.Wait()
 	return importedCount.Load(), skippedCount.Load(), failedCount.Load()
 }

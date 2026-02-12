@@ -21,7 +21,7 @@ type TrackWithFeatures struct {
 	AnalysisError  *string    `json:"analysis_error,omitempty"`
 	DownloadedAt   *time.Time `json:"downloaded_at"`
 	AnalyzedAt     *time.Time `json:"analyzed_at,omitempty"`
-	
+
 	// Audio features (will be null if not analyzed yet)
 	Features *AudioFeatures `json:"features,omitempty"`
 }
@@ -36,13 +36,13 @@ func (db *DB) GetTrackStats(ctx context.Context) (map[string]int64, error) {
 			COUNT(*) FILTER (WHERE analysis_status = 'failed') as failed
 		FROM tracks
 	`
-	
+
 	var total, pending, analyzing, completed, failed int64
 	err := db.pool.QueryRow(ctx, query).Scan(&total, &pending, &analyzing, &completed, &failed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get track stats: %w", err)
 	}
-	
+
 	stats := map[string]int64{
 		"total":     total,
 		"pending":   pending,
@@ -50,25 +50,28 @@ func (db *DB) GetTrackStats(ctx context.Context) (map[string]int64, error) {
 		"completed": completed,
 		"failed":    failed,
 	}
-	
+
 	return stats, nil
 }
 
 func (db *DB) GetPendingTracks(ctx context.Context, limit int) ([]*Track, error) {
+	// Use FOR UPDATE SKIP LOCKED to prevent multiple workers from getting the same tracks
+	// SKIP LOCKED ensures workers skip rows already locked by other transactions
 	query := `
 		SELECT id, file_path, analysis_status
 		FROM tracks
 		WHERE analysis_status = 'pending'
 		ORDER BY downloaded_at ASC
 		LIMIT $1
+		FOR UPDATE SKIP LOCKED
 	`
-	
+
 	rows, err := db.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending tracks: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var tracks []*Track
 	for rows.Next() {
 		track := &Track{}
@@ -77,8 +80,55 @@ func (db *DB) GetPendingTracks(ctx context.Context, limit int) ([]*Track, error)
 		}
 		tracks = append(tracks, track)
 	}
-	
+
 	return tracks, nil
+}
+
+// ClaimPendingTrack atomically fetches one pending track and marks it as 'analyzing'
+// This prevents race conditions where multiple workers process the same track
+func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) // Rollback if not committed
+
+	// Get one pending track with row-level lock
+	query := `
+		SELECT id, file_path, analysis_status
+		FROM tracks
+		WHERE analysis_status = 'pending'
+		ORDER BY downloaded_at ASC
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`
+
+	var track Track
+	err = tx.QueryRow(ctx, query).Scan(&track.ID, &track.FilePath, &track.AnalysisStatus)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil // No pending tracks available
+		}
+		return nil, fmt.Errorf("failed to query pending track: %w", err)
+	}
+
+	// Update status to 'analyzing' in same transaction
+	updateQuery := `
+		UPDATE tracks 
+		SET analysis_status = 'analyzing'
+		WHERE id = $1
+	`
+	_, err = tx.Exec(ctx, updateQuery, track.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update track status: %w", err)
+	}
+
+	// Commit transaction - lock is held until this point
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return &track, nil
 }
 
 // ListTracks returns paginated list of tracks with optional status filter
@@ -93,42 +143,42 @@ func (db *DB) ListTracks(ctx context.Context, limit, offset int, status string) 
 		FROM tracks t
 		LEFT JOIN audio_features af ON t.id = af.track_id
 	`
-	
+
 	args := []interface{}{limit, offset}
 	countArgs := []interface{}{}
-	
+
 	if status != "" {
 		query += " WHERE t.analysis_status = $3"
 		args = append(args, status)
 		countArgs = append(countArgs, status)
 	}
-	
+
 	query += " ORDER BY t.downloaded_at DESC LIMIT $1 OFFSET $2"
-	
+
 	// Get total count
 	countQuery := "SELECT COUNT(*) FROM tracks"
 	if status != "" {
 		countQuery += " WHERE analysis_status = $1"
 	}
-	
+
 	var total int64
 	if err := db.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count query failed: %w", err)
 	}
-	
+
 	// Get tracks
 	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var tracks []TrackWithFeatures
 	for rows.Next() {
 		var track TrackWithFeatures
 		var features AudioFeatures
 		var hasFeatures bool
-		
+
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 			&track.DownloadedAt, &track.AnalyzedAt,
@@ -140,24 +190,24 @@ func (db *DB) ListTracks(ctx context.Context, limit, offset int, status string) 
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan failed: %w", err)
 		}
-		
+
 		// Check if features exist (BPM will be null if no features)
 		if features.BPM != nil {
 			hasFeatures = true
 			track.Features = &features
 		}
-		
+
 		if !hasFeatures {
 			track.Features = nil
 		}
-		
+
 		tracks = append(tracks, track)
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("rows iteration failed: %w", err)
 	}
-	
+
 	return tracks, total, nil
 }
 
@@ -173,10 +223,10 @@ func (db *DB) GetTrackByID(ctx context.Context, trackID int64) (*TrackWithFeatur
 		LEFT JOIN audio_features af ON t.id = af.track_id
 		WHERE t.id = $1
 	`
-	
+
 	var track TrackWithFeatures
 	var features AudioFeatures
-	
+
 	err := db.pool.QueryRow(ctx, query, trackID).Scan(
 		&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 		&track.DownloadedAt, &track.AnalyzedAt,
@@ -185,16 +235,16 @@ func (db *DB) GetTrackByID(ctx context.Context, trackID int64) (*TrackWithFeatur
 		&features.Acousticness, &features.Instrumentalness, &features.Liveness,
 		&features.Valence, &features.Melodicness,
 	)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get track: %w", err)
 	}
-	
+
 	// Check if features exist
 	if features.BPM != nil {
 		track.Features = &features
 	}
-	
+
 	return &track, nil
 }
 
@@ -212,19 +262,19 @@ func (db *DB) SearchTracks(ctx context.Context, query string, limit int) ([]Trac
 		ORDER BY t.downloaded_at DESC
 		LIMIT $2
 	`
-	
+
 	searchPattern := "%" + query + "%"
 	rows, err := db.pool.Query(ctx, searchQuery, searchPattern, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search query failed: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var tracks []TrackWithFeatures
 	for rows.Next() {
 		var track TrackWithFeatures
 		var features AudioFeatures
-		
+
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 			&track.DownloadedAt, &track.AnalyzedAt,
@@ -236,14 +286,14 @@ func (db *DB) SearchTracks(ctx context.Context, query string, limit int) ([]Trac
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-		
+
 		if features.BPM != nil {
 			track.Features = &features
 		}
-		
+
 		tracks = append(tracks, track)
 	}
-	
+
 	return tracks, nil
 }
 
@@ -257,13 +307,13 @@ func (db *DB) GetFailedTracks(ctx context.Context, limit int) ([]TrackWithFeatur
 		ORDER BY analyzed_at DESC
 		LIMIT $1
 	`
-	
+
 	rows, err := db.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var tracks []TrackWithFeatures
 	for rows.Next() {
 		var track TrackWithFeatures
@@ -276,7 +326,7 @@ func (db *DB) GetFailedTracks(ctx context.Context, limit int) ([]TrackWithFeatur
 		}
 		tracks = append(tracks, track)
 	}
-	
+
 	return tracks, nil
 }
 
@@ -290,13 +340,13 @@ func (db *DB) GetRecentCompletedTracks(ctx context.Context, limit int) ([]TrackW
 		ORDER BY analyzed_at DESC
 		LIMIT $1
 	`
-	
+
 	rows, err := db.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var tracks []TrackWithFeatures
 	for rows.Next() {
 		var track TrackWithFeatures
@@ -309,6 +359,6 @@ func (db *DB) GetRecentCompletedTracks(ctx context.Context, limit int) ([]TrackW
 		}
 		tracks = append(tracks, track)
 	}
-	
+
 	return tracks, nil
 }

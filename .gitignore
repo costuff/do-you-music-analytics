@@ -7,6 +7,12 @@
 bin/
 dist/
 
+# Root-level compiled binaries
+/migrate
+/test-analyzer
+/api
+/worker
+
 # Test binaries
 *.test
 *.out

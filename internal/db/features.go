@@ -87,7 +87,7 @@ func (db *DB) UpdateTrackStatus(ctx context.Context, trackID int, status string,
 		now := time.Now()
 		analyzedAt = &now
 	}
-	
+
 	query := `
 		UPDATE tracks
 		SET analysis_status = $1,

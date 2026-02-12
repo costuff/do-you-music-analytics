@@ -20,7 +20,7 @@ import (
 func main() {
 	// Initialize logger
 	log := logger.New("info")
-	
+
 	version := getVersion()
 	log.Info(fmt.Sprintf("🚀 DoYou Music Analytics Worker v%s", version))
 	log.Info("=====================================")
@@ -93,39 +93,31 @@ func main() {
 
 	// Start worker pool
 	log.Info(fmt.Sprintf("🔄 Starting worker pool with %d workers...", cfg.MaxWorkers))
-	
+
 	var wg sync.WaitGroup
 	var processed, failed atomic.Int64
 	startTime := time.Now()
 
 	workerFunc := func(workerID int) {
 		defer wg.Done()
-		
+
 		for {
 			select {
 			case <-shutdownCtx.Done():
 				log.Info(fmt.Sprintf("Worker %d shutting down gracefully", workerID))
 				return
 			default:
-				// Get next pending track
-				tracks, err := database.GetPendingTracks(shutdownCtx, 1)
+				// Atomically claim next pending track (prevents race conditions)
+				track, err := database.ClaimPendingTrack(shutdownCtx)
 				if err != nil {
-					log.Error(fmt.Sprintf("Worker %d: Failed to get pending track: %v", workerID, err))
+					log.Error(fmt.Sprintf("Worker %d: Failed to claim pending track: %v", workerID, err))
 					time.Sleep(5 * time.Second)
 					continue
 				}
 
-				if len(tracks) == 0 {
-					// No more tracks, exit worker
+				if track == nil {
+					// No more pending tracks, exit worker
 					return
-				}
-
-				track := tracks[0]
-				
-				// Update status to analyzing
-				if err := database.UpdateTrackStatus(shutdownCtx, track.ID, "analyzing", nil); err != nil {
-					log.Error(fmt.Sprintf("Worker %d: Failed to update track status: %v", workerID, err))
-					continue
 				}
 
 				// Build full file path
@@ -135,10 +127,10 @@ func main() {
 				if !filepath.IsAbs(track.FilePath) {
 					filePath = filepath.Join(cfg.NASMountPath, track.FilePath)
 				}
-				
+
 				// Analyze track
 				log.Info(fmt.Sprintf("Worker %d: Analyzing [%d] %s", workerID, track.ID, filePath))
-				
+
 				features, err := anlz.AnalyzeFile(shutdownCtx, filePath)
 				if err != nil {
 					errMsg := err.Error()
@@ -182,15 +174,15 @@ func main() {
 				}
 
 				processed.Add(1)
-				
+
 				// Log progress every 10 tracks
 				if processed.Load()%10 == 0 {
 					elapsed := time.Since(startTime)
 					rate := float64(processed.Load()) / elapsed.Seconds() * 60 // per minute
 					remaining := int(stats["pending"]) - int(processed.Load())
 					eta := time.Duration(float64(remaining)/rate) * time.Minute
-					
-					log.Info(fmt.Sprintf("📊 Progress: %d/%d completed, %d failed | Rate: %.1f/min | ETA: %v", 
+
+					log.Info(fmt.Sprintf("📊 Progress: %d/%d completed, %d failed | Rate: %.1f/min | ETA: %v",
 						processed.Load(), stats["pending"], failed.Load(), rate, eta.Round(time.Minute)))
 				}
 			}
