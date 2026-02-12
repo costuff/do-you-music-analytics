@@ -95,6 +95,62 @@ func main() {
 	var processed, failed atomic.Int64
 	startTime := time.Now()
 
+	// Start periodic cleanup if enabled
+	if cfg.EnableCleanup {
+		cleanupInterval, err := time.ParseDuration(cfg.CleanupInterval)
+		if err != nil {
+			log.Fatal(fmt.Sprintf("Invalid cleanup interval: %v", err))
+		}
+		log.Info(fmt.Sprintf("🧹 Cleanup enabled: %s missing files every %v", cfg.CleanupAction, cleanupInterval))
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cleanupTicker := time.NewTicker(cleanupInterval)
+			defer cleanupTicker.Stop()
+
+			// Run initial cleanup after 5 minutes
+			time.Sleep(5 * time.Minute)
+			log.Info("🧹 Running initial cleanup check...")
+			stats, err := database.CleanupMissingTracks(shutdownCtx, cfg.NASMountPath, cfg.CleanupAction)
+			if err != nil {
+				log.Error(fmt.Sprintf("Cleanup failed: %v", err))
+			} else if stats.MissingTracks > 0 {
+				if cfg.CleanupAction == "mark" {
+					log.Info(fmt.Sprintf("✅ Marked %d missing tracks", stats.MarkedMissing))
+				} else {
+					log.Info(fmt.Sprintf("✅ Deleted %d missing tracks", stats.Deleted))
+				}
+			} else {
+				log.Info("✅ No missing tracks found")
+			}
+
+			for {
+				select {
+				case <-shutdownCtx.Done():
+					log.Info("Cleanup shutting down")
+					return
+				case <-cleanupTicker.C:
+					log.Info("🧹 Running cleanup check...")
+					stats, err := database.CleanupMissingTracks(shutdownCtx, cfg.NASMountPath, cfg.CleanupAction)
+					if err != nil {
+						log.Error(fmt.Sprintf("Cleanup failed: %v", err))
+					} else if stats.MissingTracks > 0 {
+						if cfg.CleanupAction == "mark" {
+							log.Info(fmt.Sprintf("✅ Marked %d missing tracks", stats.MarkedMissing))
+						} else {
+							log.Info(fmt.Sprintf("✅ Deleted %d missing tracks", stats.Deleted))
+						}
+					} else {
+						log.Debug("No missing tracks found")
+					}
+				}
+			}
+		}()
+	} else {
+		log.Info("🧹 Cleanup disabled (use ENABLE_CLEANUP=true to enable)")
+	}
+
 	// Start periodic scanner in background
 	wg.Add(1)
 	go func() {

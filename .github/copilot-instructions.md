@@ -103,7 +103,14 @@ doyou-music-analytics/
 - Automatic retry on failure
 - Progress logging with track details
 
-### 4. REST API
+### 4. Automatic Cleanup (Optional)
+- Detects files deleted from NAS
+- Two modes: "mark" (set status='missing') or "delete" (remove from DB)
+- Configurable interval (default: 24h)
+- Disabled by default for safety
+- Keeps statistics accurate
+
+### 5. REST API
 - Query analyzed tracks with audio features
 - Search tracks by title, artist, album
 - Get statistics (total tracks, analyzed, pending, failed)
@@ -330,16 +337,16 @@ docker-compose down
 - Use meaningful test names: `TestFunctionName_Scenario_ExpectedBehavior`
 
 **Test Files Location:**
-- `internal/*_test.go` - Test files (handlers_test.go, analyzer_test.go, config_test.go, db_test.go)
+- `internal/*_test.go` - Test files (handlers_test.go, analyzer_test.go, config_test.go, db_test.go, scanner_test.go)
 - `pkg/*_test.go` - Package tests (logger_test.go)
 - Run: `go test ./...`
 - Coverage: `go test -cover ./...`
 - Count tests: `go test -v ./... 2>&1 | grep -c "^=== RUN"`
-  - **Current Stats**: 51 tests, ~50% average coverage
+  - **Current Stats**: 99 tests, ~50% average coverage
     - internal/api: 30 tests, 29.7% coverage
     - internal/analyzer: 1 test, 5.6% coverage
     - internal/config: 11 tests, 91.9% coverage
-    - internal/db: 5 tests, 24.8% coverage (skipped without DATABASE_URL)
+    - internal/db: 54 tests, ~40% coverage (includes scanner + cleanup tests, skipped without DATABASE_URL)
     - pkg/logger: 4 tests, 32.8% coverage
 
 **When Adding Features:**
@@ -355,7 +362,7 @@ docker-compose down
 - **ALWAYS update test coverage statistics** after adding/modifying tests
 - Run `go test -cover ./...` to get coverage percentage
 - Run `go test -v ./... 2>&1 | grep -c "^=== RUN"` to count total tests
-- Update format: `# 51 tests passing, ~50% coverage`
+- Update format: `# 99 tests passing, ~50% coverage`
 - Keep API documentation synchronized with actual endpoints
 - Update `docs/TODO.md` when completing tasks or adding new ones
 

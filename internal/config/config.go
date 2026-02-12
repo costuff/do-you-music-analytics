@@ -24,6 +24,11 @@ type Config struct {
 	AnalysisTimeout string
 	ScanInterval    string // How often to scan for new tracks (e.g., "5m", "1h")
 	
+	// Cleanup
+	EnableCleanup   bool   // Enable automatic cleanup of missing files
+	CleanupAction   string // Action for missing files: "mark" or "delete"
+	CleanupInterval string // How often to run cleanup (e.g., "1h", "24h")
+	
 	// API
 	APIPort    int
 	LogLevel   string
@@ -47,11 +52,16 @@ func Load() (*Config, error) {
 		
 		// Analysis
 		BatchSize:       getEnvInt("BATCH_SIZE", 10),
-		MaxWorkers:      getEnvInt("MAX_WORKERS", 4),
+		MaxWorkers:      getEnvInt("MAX_WORKERS", 6),
 		PythonPath:      getEnv("PYTHON_PATH", "/usr/bin/python3"),
 		AnalysisScript:  getEnv("ANALYSIS_SCRIPT", "./scripts/analyze_audio.py"),
-		AnalysisTimeout: getEnv("ANALYSIS_TIMEOUT", "60s"),
-		ScanInterval:    getEnv("SCAN_INTERVAL", "30m"), // Scan for new tracks every 30 minutes
+		AnalysisTimeout: getEnv("ANALYSIS_TIMEOUT", "300s"),
+		ScanInterval:    getEnv("SCAN_INTERVAL", "30m"),
+		
+		// Cleanup
+		EnableCleanup:   getEnvBool("ENABLE_CLEANUP", false),
+		CleanupAction:   getEnv("CLEANUP_ACTION", "mark"),    // "mark" or "delete"
+		CleanupInterval: getEnv("CLEANUP_INTERVAL", "24h"), // Scan for new tracks every 30 minutes
 		
 		// API
 		APIPort:     getEnvInt("API_PORT", 4000),

@@ -361,3 +361,197 @@ func TestScanAndImportNewTracks_Integration(t *testing.T) {
 		t.Errorf("Expected at least %d pending tracks, got %d", imported, stats["pending"])
 	}
 }
+
+func TestCleanupMissingTracks_Mark(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	database, err := Connect(ctx, dbURL, 5)
+	if err != nil {
+		t.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	// Create temp directory
+	tempDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(tempDir, "test.mp3")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import the track
+	relPath, _ := filepath.Rel(tempDir, testFile)
+	_, err = database.pool.Exec(ctx,
+		"INSERT INTO tracks (file_path, file_name, analysis_status) VALUES ($1, $2, 'pending')",
+		relPath, "test.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the track ID for cleanup
+	var trackID int64
+	err = database.pool.QueryRow(ctx, "SELECT id FROM tracks WHERE file_name = 'test.mp3' ORDER BY id DESC LIMIT 1").Scan(&trackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.pool.Exec(ctx, "DELETE FROM tracks WHERE id = $1", trackID)
+
+	// Delete the file to simulate missing file
+	os.Remove(testFile)
+
+	// Run cleanup with "mark" action
+	stats, err := database.CleanupMissingTracks(ctx, tempDir, "mark")
+	if err != nil {
+		t.Fatalf("CleanupMissingTracks failed: %v", err)
+	}
+
+	if stats.MissingTracks != 1 {
+		t.Errorf("Expected 1 missing track, got %d", stats.MissingTracks)
+	}
+
+	if stats.MarkedMissing != 1 {
+		t.Errorf("Expected 1 marked track, got %d", stats.MarkedMissing)
+	}
+
+	// Verify the track was marked as missing
+	var status string
+	err = database.pool.QueryRow(ctx, "SELECT analysis_status FROM tracks WHERE id = $1", trackID).Scan(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status != "missing" {
+		t.Errorf("Expected status 'missing', got '%s'", status)
+	}
+}
+
+func TestCleanupMissingTracks_Delete(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	database, err := Connect(ctx, dbURL, 5)
+	if err != nil {
+		t.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	// Create temp directory
+	tempDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(tempDir, "delete-test.mp3")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import the track
+	relPath, _ := filepath.Rel(tempDir, testFile)
+	_, err = database.pool.Exec(ctx,
+		"INSERT INTO tracks (file_path, file_name, analysis_status) VALUES ($1, $2, 'pending')",
+		relPath, "delete-test.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the track ID
+	var trackID int64
+	err = database.pool.QueryRow(ctx, "SELECT id FROM tracks WHERE file_name = 'delete-test.mp3' ORDER BY id DESC LIMIT 1").Scan(&trackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the file to simulate missing file
+	os.Remove(testFile)
+
+	// Run cleanup with "delete" action
+	stats, err := database.CleanupMissingTracks(ctx, tempDir, "delete")
+	if err != nil {
+		t.Fatalf("CleanupMissingTracks failed: %v", err)
+	}
+
+	if stats.MissingTracks != 1 {
+		t.Errorf("Expected 1 missing track, got %d", stats.MissingTracks)
+	}
+
+	if stats.Deleted != 1 {
+		t.Errorf("Expected 1 deleted track, got %d", stats.Deleted)
+	}
+
+	// Verify the track was deleted from database
+	var count int
+	err = database.pool.QueryRow(ctx, "SELECT COUNT(*) FROM tracks WHERE id = $1", trackID).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 0 {
+		t.Errorf("Track should be deleted, but still exists in database")
+	}
+}
+
+func TestCleanupMissingTracks_SkipsExisting(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	database, err := Connect(ctx, dbURL, 5)
+	if err != nil {
+		t.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	// Create temp directory with a file that exists
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "existing.mp3")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import the track
+	relPath, _ := filepath.Rel(tempDir, testFile)
+	_, err = database.pool.Exec(ctx,
+		"INSERT INTO tracks (file_path, file_name, analysis_status) VALUES ($1, $2, 'pending')",
+		relPath, "existing.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get track ID for cleanup
+	var trackID int64
+	err = database.pool.QueryRow(ctx, "SELECT id FROM tracks WHERE file_name = 'existing.mp3' ORDER BY id DESC LIMIT 1").Scan(&trackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.pool.Exec(ctx, "DELETE FROM tracks WHERE id = $1", trackID)
+
+	// Run cleanup (file exists, should not be touched)
+	stats, err := database.CleanupMissingTracks(ctx, tempDir, "mark")
+	if err != nil {
+		t.Fatalf("CleanupMissingTracks failed: %v", err)
+	}
+
+	if stats.MissingTracks != 0 {
+		t.Errorf("Expected 0 missing tracks, got %d", stats.MissingTracks)
+	}
+
+	// Verify the track status unchanged
+	var status string
+	err = database.pool.QueryRow(ctx, "SELECT analysis_status FROM tracks WHERE id = $1", trackID).Scan(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status != "pending" {
+		t.Errorf("Expected status 'pending', got '%s'", status)
+	}
+}

@@ -32,11 +32,12 @@ See [docs/ANALYTICS_ARCHITECTURE.md](docs/ANALYTICS_ARCHITECTURE.md) for detaile
 
 - ✅ **Automatic NAS scanning** - Detects new tracks every 30 minutes
 - ✅ **Continuous processing** - 6 parallel workers, never stops
+- ✅ **Missing file cleanup** - Automatically detects and handles deleted files (mark or delete)
 - ✅ **13 audio features** - BPM, key, energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness, loudness, duration, mode
 - ✅ **REST API** - Query statistics and analyzed tracks
 - ✅ **PostgreSQL storage** - Atomic operations, no race conditions
 - ✅ **Docker deployment** - GitHub Actions → GHCR → Watchtower auto-updates
-- ✅ **Comprehensive tests** - 96 tests covering JSON, scanner, paths, Docker
+- ✅ **Comprehensive tests** - 99 tests covering JSON, scanner, paths, Docker, cleanup
 
 ---
 
@@ -105,6 +106,9 @@ See [.env.example](.env.example) for all configuration options.
   - Docker: `/mnt/music/downloads`
 - `MAX_WORKERS`: Number of parallel workers (default: 6, optimal for M2 Mac)
 - `SCAN_INTERVAL`: Automatic scan frequency (default: 30m)
+- `ENABLE_CLEANUP`: Enable automatic cleanup of missing files (default: false)
+- `CLEANUP_ACTION`: How to handle missing files - "mark" or "delete" (default: mark)
+- `CLEANUP_INTERVAL`: Cleanup frequency (default: 24h)
 - `PYTHON_PATH`: Python 3.11+ executable path
 - `ANALYSIS_SCRIPT`: Path to analyze_audio.py
 
@@ -124,6 +128,31 @@ See [.env.example](.env.example) for all configuration options.
 - `GET /api/v1/tracks/failed?limit=50` - Get failed tracks with error messages
 
 See [docs/API_USAGE.md](docs/API_USAGE.md) for detailed usage examples and Node.js integration code.
+
+---
+
+## Automatic Cleanup
+
+The worker can automatically detect and handle files that no longer exist on the filesystem (e.g., deleted corrupted files).
+
+**Configuration:**
+```bash
+ENABLE_CLEANUP=true           # Enable cleanup (default: false)
+CLEANUP_ACTION=mark           # "mark" or "delete" (default: mark)
+CLEANUP_INTERVAL=24h          # How often to check (default: 24h)
+```
+
+**Cleanup Actions:**
+- **`mark`** (recommended): Sets `analysis_status='missing'` and adds error message. Preserves history for reference.
+- **`delete`**: Permanently removes track records from database. Use with caution.
+
+**Default Behavior:**
+- Disabled by default (opt-in for safety)
+- First cleanup runs 5 minutes after worker starts
+- Subsequent cleanups run on the configured interval
+- Logs all cleanup operations (marked/deleted counts)
+
+This ensures statistics remain accurate when files are manually deleted from the NAS.
 
 ---
 
@@ -157,7 +186,7 @@ doyou-music-analytics/
 ### Running Tests
 
 ```bash
-# Run all tests (96 tests)
+# Run all tests (99 tests)
 go test ./...
 
 # Run with coverage
