@@ -30,7 +30,12 @@ services:
   #     DATABASE_URL: postgresql://doyou:${DB_PASSWORD:-dev_password_change_me}@postgres:5432/doyou_music
   #     NAS_MOUNT_PATH: /mnt/music/downloads
   #     BATCH_SIZE: ${BATCH_SIZE:-10}
-  #     MAX_WORKERS: ${MAX_WORKERS:-4}
+  #     MAX_WORKERS: ${MAX_WORKERS:-6}
+  #     ANALYSIS_TIMEOUT: ${ANALYSIS_TIMEOUT:-300s}
+  #     SCAN_INTERVAL: ${SCAN_INTERVAL:-30m}
+  #     ENABLE_CLEANUP: ${ENABLE_CLEANUP:-true}
+  #     CLEANUP_ACTION: ${CLEANUP_ACTION:-mark}
+  #     CLEANUP_INTERVAL: ${CLEANUP_INTERVAL:-24h}
   #     LOG_LEVEL: ${LOG_LEVEL:-info}
   #   volumes:
   #     - ${NAS_PATH:-/mnt/music}:/mnt/music:ro

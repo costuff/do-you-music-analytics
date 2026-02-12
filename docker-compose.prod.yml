@@ -35,15 +35,22 @@ services:
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-doyou}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-doyou_music}
       
+      # Storage
+      NAS_MOUNT_PATH: /mnt/music/downloads
+      VALIDATE_NAS_ON_STARTUP: ${VALIDATE_NAS_ON_STARTUP:-true}
+      
       # Analysis Configuration
       BATCH_SIZE: ${BATCH_SIZE:-10}
-      MAX_WORKERS: ${MAX_WORKERS:-4}
+      MAX_WORKERS: ${MAX_WORKERS:-6}
       PYTHON_PATH: /usr/local/bin/python3
       ANALYSIS_SCRIPT: /app/scripts/analyze_audio.py
-      ANALYSIS_TIMEOUT: ${ANALYSIS_TIMEOUT:-90s}
+      ANALYSIS_TIMEOUT: ${ANALYSIS_TIMEOUT:-300s}
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-30m}
       
-      # Paths
-      MUSIC_DIR: /mnt/music/downloads
+      # Cleanup Configuration
+      ENABLE_CLEANUP: ${ENABLE_CLEANUP:-true}
+      CLEANUP_ACTION: ${CLEANUP_ACTION:-mark}
+      CLEANUP_INTERVAL: ${CLEANUP_INTERVAL:-24h}
       
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
