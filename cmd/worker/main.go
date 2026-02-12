@@ -129,10 +129,15 @@ func main() {
 				}
 
 				// Build full file path
-				filePath := filepath.Join(cfg.NASMountPath, track.FilePath)
+				// If the track.FilePath is already absolute, use it as-is
+				// Otherwise, join it with the NAS mount path
+				filePath := track.FilePath
+				if !filepath.IsAbs(track.FilePath) {
+					filePath = filepath.Join(cfg.NASMountPath, track.FilePath)
+				}
 				
 				// Analyze track
-				log.Info(fmt.Sprintf("Worker %d: Analyzing [%d] %s", workerID, track.ID, track.FilePath))
+				log.Info(fmt.Sprintf("Worker %d: Analyzing [%d] %s", workerID, track.ID, filePath))
 				
 				features, err := anlz.AnalyzeFile(shutdownCtx, filePath)
 				if err != nil {

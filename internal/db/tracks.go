@@ -59,7 +59,7 @@ func (db *DB) GetPendingTracks(ctx context.Context, limit int) ([]*Track, error)
 		SELECT id, file_path, analysis_status
 		FROM tracks
 		WHERE analysis_status = 'pending'
-		ORDER BY created_at ASC
+		ORDER BY downloaded_at ASC
 		LIMIT $1
 	`
 	
