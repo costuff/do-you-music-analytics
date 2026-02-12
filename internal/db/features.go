@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // AudioFeatures represents audio analysis results
@@ -81,14 +82,20 @@ func (db *DB) CreateTrack(ctx context.Context, filePath, fileName string) (int, 
 
 // UpdateTrackStatus updates the analysis status of a track
 func (db *DB) UpdateTrackStatus(ctx context.Context, trackID int, status string, errorMsg *string) error {
+	var analyzedAt *time.Time
+	if status == "completed" {
+		now := time.Now()
+		analyzedAt = &now
+	}
+
 	query := `
 		UPDATE tracks
 		SET analysis_status = $1,
 		    analysis_error = $2,
-		    analyzed_at = CASE WHEN $1 = 'completed' THEN NOW() ELSE analyzed_at END
-		WHERE id = $3`
+		    analyzed_at = COALESCE($3, analyzed_at)
+		WHERE id = $4`
 
-	_, err := db.pool.Exec(ctx, query, status, errorMsg, trackID)
+	_, err := db.pool.Exec(ctx, query, status, errorMsg, analyzedAt, trackID)
 	if err != nil {
 		return fmt.Errorf("failed to update track status: %w", err)
 	}
