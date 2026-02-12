@@ -182,7 +182,7 @@ func main() {
 				if processed.Load()%10 == 0 {
 					elapsed := time.Since(startTime)
 					rate := float64(processed.Load()) / elapsed.Seconds() * 60 // per minute
-					remaining := stats["pending"] - int(processed.Load())
+					remaining := int(stats["pending"]) - int(processed.Load())
 					eta := time.Duration(float64(remaining)/rate) * time.Minute
 					
 					log.Info(fmt.Sprintf("📊 Progress: %d/%d completed, %d failed | Rate: %.1f/min | ETA: %v", 
