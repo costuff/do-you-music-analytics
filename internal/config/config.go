@@ -22,6 +22,7 @@ type Config struct {
 	PythonPath      string
 	AnalysisScript  string
 	AnalysisTimeout string
+	ScanInterval    string // How often to scan for new tracks (e.g., "5m", "1h")
 	
 	// API
 	APIPort    int
@@ -50,6 +51,7 @@ func Load() (*Config, error) {
 		PythonPath:      getEnv("PYTHON_PATH", "/usr/bin/python3"),
 		AnalysisScript:  getEnv("ANALYSIS_SCRIPT", "./scripts/analyze_audio.py"),
 		AnalysisTimeout: getEnv("ANALYSIS_TIMEOUT", "60s"),
+		ScanInterval:    getEnv("SCAN_INTERVAL", "30m"), // Scan for new tracks every 30 minutes
 		
 		// API
 		APIPort:     getEnvInt("API_PORT", 4000),

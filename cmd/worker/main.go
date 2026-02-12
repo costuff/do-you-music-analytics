@@ -72,17 +72,13 @@ func main() {
 	log.Info(fmt.Sprintf("   Completed: %d", stats["completed"]))
 	log.Info(fmt.Sprintf("   Failed: %d", stats["failed"]))
 
-	// Check if there are tracks to process
-	if stats["pending"] == 0 && stats["total"] == 0 {
-		log.Info("⚠️  No tracks found in database. Please import MP3 files first.")
-		log.Info("💡 Run: go run cmd/import-tracks to scan and import from music directory")
-		return
+	// Parse scan interval
+	scanInterval, err := time.ParseDuration(cfg.ScanInterval)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Invalid scan interval: %v", err))
 	}
 
-	if stats["pending"] == 0 {
-		log.Info("✅ All tracks already processed!")
-		return
-	}
+	log.Info(fmt.Sprintf("🔍 Automatic scan interval: %v", scanInterval))
 
 	// Setup graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithCancel(ctx)
@@ -93,10 +89,48 @@ func main() {
 
 	// Start worker pool
 	log.Info(fmt.Sprintf("🔄 Starting worker pool with %d workers...", cfg.MaxWorkers))
+	log.Info("🔄 Worker will run continuously, scanning for new tracks and processing pending ones")
 
 	var wg sync.WaitGroup
 	var processed, failed atomic.Int64
 	startTime := time.Now()
+
+	// Start periodic scanner in background
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanTicker := time.NewTicker(scanInterval)
+		defer scanTicker.Stop()
+
+		// Run initial scan immediately
+		log.Info("🔍 Running initial scan for new tracks...")
+		newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath)
+		if err != nil {
+			log.Error(fmt.Sprintf("Initial scan failed: %v", err))
+		} else if newTracks > 0 {
+			log.Info(fmt.Sprintf("✅ Imported %d new tracks", newTracks))
+		} else {
+			log.Info("✅ No new tracks found")
+		}
+
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				log.Info("Scanner shutting down")
+				return
+			case <-scanTicker.C:
+				log.Info("🔍 Scanning for new tracks...")
+				newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath)
+				if err != nil {
+					log.Error(fmt.Sprintf("Scan failed: %v", err))
+				} else if newTracks > 0 {
+					log.Info(fmt.Sprintf("✅ Imported %d new tracks", newTracks))
+				} else {
+					log.Debug("No new tracks found")
+				}
+			}
+		}
+	}()
 
 	workerFunc := func(workerID int) {
 		defer wg.Done()
@@ -116,8 +150,9 @@ func main() {
 				}
 
 				if track == nil {
-					// No more pending tracks, exit worker
-					return
+					// No pending tracks, sleep briefly and try again
+					time.Sleep(10 * time.Second)
+					continue
 				}
 
 				// Build full file path
@@ -195,20 +230,11 @@ func main() {
 		go workerFunc(i)
 	}
 
-	// Wait for shutdown signal or workers to complete
-	go func() {
-		wg.Wait()
-		shutdownCancel()
-	}()
-
-	select {
-	case sig := <-sigChan:
-		log.Info(fmt.Sprintf("⚠️  Received signal: %v", sig))
-		log.Info("🛑 Initiating graceful shutdown...")
-		shutdownCancel()
-	case <-shutdownCtx.Done():
-		// Workers completed naturally
-	}
+	// Wait for shutdown signal (workers run forever until signaled)
+	sig := <-sigChan
+	log.Info(fmt.Sprintf("⚠️  Received signal: %v", sig))
+	log.Info("🛑 Initiating graceful shutdown...")
+	shutdownCancel()
 
 	// Wait for all workers with timeout
 	done := make(chan struct{})
