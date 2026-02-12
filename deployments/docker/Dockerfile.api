@@ -24,8 +24,9 @@ WORKDIR /app
 # Install ca-certificates for HTTPS and python3 (for validation check)
 RUN apk --no-cache add ca-certificates python3
 
-# Copy API binary from builder
+# Copy API binary and scripts from builder
 COPY --from=builder /build/api /app/api
+COPY --from=builder /build/scripts /app/scripts
 
 # Run as non-root user
 RUN adduser -D -u 1000 appuser && chown -R appuser:appuser /app
