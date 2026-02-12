@@ -12,6 +12,7 @@ dist/
 /test-analyzer
 /api
 /worker
+/import-tracks
 
 # Test binaries
 *.test
