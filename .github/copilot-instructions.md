@@ -1,18 +1,25 @@
 # DoYou Music Analytics - Copilot Instructions
 
 ## Project Overview
-This is an audio analysis and metadata extraction service for DoYou World Radio. It analyzes 9,875+ MP3 tracks from NAS storage, extracts 13 audio features using Python/librosa, stores results in PostgreSQL, and provides a REST API for querying analyzed tracks.
+This is an audio analysis and metadata extraction service for DoYou World Radio. It analyzes MP3 tracks from local storage, extracts 13 audio features using Python/librosa, stores results in PostgreSQL, and provides a REST API for querying analyzed tracks.
+
+**Current Status (Feb 2026):**
+- 3,752 tracks imported from `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks/`
+- 135 successfully analyzed (~4%)
+- ~1,100 failed (corrupted MP3 files - normal, worker skips them)
+- ~2,500 pending analysis
+- Worker processes 6 tracks in parallel
 
 ## Tech Stack
-- **Backend**: Go 1.23+ with standard library net/http + gorilla/mux router
+- **Backend**: Go 1.25+ with standard library net/http + gorilla/mux router
 - **Audio Analysis**: Python 3.11 + librosa v0.10+ + soundfile + ffmpeg
 - **Database**: PostgreSQL 16 with pgx driver
-- **Worker**: Batch processor with concurrent track analysis (4 parallel workers)
-- **Storage**: NAS at `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks` (40GB, 9,875 MP3 files)
+- **Worker**: Continuous processor with 6 parallel workers (M2 optimized)
+- **Storage**: `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks/` (13,542 MP3 files, ~65GB)
 - **API**: REST API with JSON responses, CORS enabled
-- **Deployment**: Docker Compose + GitHub Actions + Watchtower auto-updates
+- **Deployment**: Docker Compose + GitHub Actions (GHCR) + Watchtower auto-updates
 - **Logging**: Structured logging with zerolog
-- **Config**: Centralized configuration via environment variables
+- **Config**: Centralized configuration via environment variables (.env file)
 
 ## Project Structure (Clean Architecture)
 ```
@@ -135,6 +142,87 @@ doyou-music-analytics/
   }
 }
 ```
+
+## Database Usage & Integration
+
+### Connection Details
+```bash
+Host: localhost (or doyou-analytics-db from Docker network)
+Port: 5432
+Database: doyou_music
+User: doyou
+Password: REDACTED_ROTATED_CREDENTIAL
+```
+
+### Common Queries for Scraper Integration
+
+**Get All Completed Analyses:**
+```sql
+SELECT t.file_name, t.artist, t.title, af.bpm, af.key, af.energy, af.danceability, af.valence
+FROM tracks t
+JOIN audio_features af ON t.id = af.track_id
+WHERE t.analysis_status = 'completed'
+ORDER BY t.analyzed_at DESC;
+```
+
+**Find High Energy Danceable Tracks:**
+```sql
+SELECT t.file_name, af.bpm, af.energy, af.danceability
+FROM tracks t
+JOIN audio_features af ON t.id = af.track_id
+WHERE t.analysis_status = 'completed'
+  AND af.energy > 0.7
+  AND af.danceability > 0.8
+ORDER BY af.danceability DESC;
+```
+
+**Check if Specific Track is Analyzed:**
+```sql
+SELECT analysis_status, analyzed_at 
+FROM tracks 
+WHERE file_path = '/mnt/music/downloads/doyou-world-radio-tracks/filename.mp3';
+```
+
+**Get Progress Stats:**
+```sql
+SELECT analysis_status, COUNT(*) as count
+FROM tracks
+GROUP BY analysis_status;
+```
+
+### Python Integration Example (for Scraper)
+```python
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+conn = psycopg2.connect(
+    host="localhost",
+    port=5432,
+    database="doyou_music",
+    user="doyou",
+    password="REDACTED_ROTATED_CREDENTIAL"
+)
+
+# Get completed analyses
+with conn.cursor(cursor_factory=RealDictCursor) as cur:
+    cur.execute("""
+        SELECT t.file_name, af.bpm, af.key, af.energy
+        FROM tracks t
+        JOIN audio_features af ON t.id = af.track_id
+        WHERE t.analysis_status = 'completed'
+        ORDER BY t.analyzed_at DESC LIMIT 100
+    """)
+    tracks = cur.fetchall()
+    for track in tracks:
+        print(f"{track['file_name']}: {track['bpm']} BPM, {track['key']} key")
+```
+
+**📖 Full Database Documentation:** See [docs/DATABASE_USAGE.md](../docs/DATABASE_USAGE.md) for:
+- Complete schema details
+- All audio feature descriptions (what each 0-1 value means)
+- Advanced query examples
+- Integration patterns
+- Monitoring commands
 
 ## Development Guidelines
 
