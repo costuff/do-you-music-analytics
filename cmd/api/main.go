@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/costuff/doyou-music-analytics/internal/api"
 	"github.com/costuff/doyou-music-analytics/internal/config"
 	"github.com/costuff/doyou-music-analytics/internal/db"
 	"github.com/costuff/doyou-music-analytics/pkg/logger"
@@ -17,7 +19,8 @@ import (
 func main() {
 	// Initialize logger
 	log := logger.New("info")
-	log.Info("Starting DoYou Music Analytics API")
+	version := getVersion()
+	log.Info(fmt.Sprintf("Starting DoYou Music Analytics API v%s", version))
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -38,25 +41,25 @@ func main() {
 	}
 	log.Info("Database connection established")
 
+	// Create handlers
+	handlers := api.NewHandlers(database, log, version)
+
+	// Setup routes
 	mux := http.NewServeMux()
 	
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"healthy","version":"%s","timestamp":"%s"}`, 
-			getVersion(), time.Now().Format(time.RFC3339))
-	})
+	// Health check
+	mux.HandleFunc("/health", handlers.HealthHandler)
+	
+	// API v1 routes
+	mux.HandleFunc("/api/v1/stats", handlers.StatsHandler)
+	mux.HandleFunc("/api/v1/stats/detailed", handlers.DetailedStatsHandler)
+	mux.HandleFunc("/api/v1/tracks", handlers.ListTracksHandler)
+	mux.HandleFunc("/api/v1/tracks/", routeTrackByID(handlers))
+	mux.HandleFunc("/api/v1/tracks/search", handlers.SearchTracksHandler)
+	mux.HandleFunc("/api/v1/tracks/failed", handlers.FailedTracksHandler)
 
-	mux.HandleFunc("/api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
-		stats, err := database.GetTrackStats(r.Context())
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"total":%d,"pending":%d,"analyzing":%d,"completed":%d,"failed":%d}`,
-			stats["total"], stats["pending"], stats["analyzing"], stats["completed"], stats["failed"])
-	})
+	// Apply middleware
+	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -65,7 +68,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -94,10 +97,33 @@ func main() {
 	log.Info("Server stopped")
 }
 
+// routeTrackByID handles both /api/v1/tracks (list) and /api/v1/tracks/:id (get single)
+func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is /api/v1/tracks/:id or /api/v1/tracks/search or /api/v1/tracks/failed
+		path := strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/")
+		
+		// If path is empty or has query params, it's the list endpoint
+		if path == "" || r.URL.RawQuery != "" {
+			handlers.ListTracksHandler(w, r)
+			return
+		}
+		
+		// If path is "search" or "failed", those are handled by specific routes
+		if path == "search" || path == "failed" {
+			http.NotFound(w, r)
+			return
+		}
+		
+		// Otherwise it's a track ID
+		handlers.GetTrackHandler(w, r)
+	}
+}
+
 func getVersion() string {
 	version, err := os.ReadFile("VERSION")
 	if err != nil {
 		return "unknown"
 	}
-	return string(version)
+	return strings.TrimSpace(string(version))
 }
