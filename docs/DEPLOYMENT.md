@@ -76,6 +76,114 @@ docker-compose -f docker-compose.prod.yml logs -f worker
 
 ---
 
+## 🧪 Pre-Push Local Testing
+
+**CRITICAL:** Always test Docker builds locally before pushing to `main` to prevent production issues.
+
+### Why Test Locally?
+
+- Catches race conditions and bugs before production
+- Validates Docker image builds successfully
+- Ensures all dependencies and paths work in containerized environment
+- Prevents broken deployments that trigger unnecessary Watchtower updates
+
+### Local Testing Workflow
+
+**1. Build Both Docker Images:**
+
+```bash
+# Build API image
+docker build -f deployments/docker/Dockerfile.api -t doyou-analytics-api:local .
+
+# Build Worker image
+docker build -f deployments/docker/Dockerfile.worker -t doyou-analytics-worker:local .
+
+# Verify both images built successfully
+docker images | grep doyou-analytics
+```
+
+**2. Run Services Locally with Docker Compose:**
+
+```bash
+# Start all services (postgres + api + worker)
+docker-compose up -d
+
+# Or start specific services
+docker-compose up -d postgres  # Database first
+docker-compose up -d api       # API server
+docker-compose up -d worker    # Worker (processes tracks)
+
+# Check logs
+docker-compose logs -f worker
+docker-compose logs -f api
+```
+
+**3. Verify Health Checks:**
+
+```bash
+# API health check
+curl http://localhost:8080/health
+# Expected: {"status":"healthy","database":"connected"}
+
+# Check worker is processing
+docker-compose logs worker | grep "Processing track"
+
+# Check database connection
+docker-compose exec postgres psql -U doyou -d doyou_music -c "SELECT COUNT(*) FROM tracks;"
+```
+
+**4. Test with Sample Tracks (Optional):**
+
+```bash
+# Import a few test tracks (use small subset for quick testing)
+go run ./cmd/import-tracks /path/to/test/tracks
+
+# Watch worker process them
+docker-compose logs -f worker
+
+# Verify features were extracted
+docker-compose exec postgres psql -U doyou -d doyou_music \
+  -c "SELECT title, bpm, key, energy FROM tracks t JOIN audio_features af ON t.id = af.track_id LIMIT 5;"
+```
+
+**5. Pre-Push Checklist:**
+
+- [ ] All unit tests pass: `go test ./...`
+- [ ] Docker API image builds successfully
+- [ ] Docker Worker image builds successfully
+- [ ] `docker-compose up` runs without errors
+- [ ] API health check returns 200
+- [ ] Worker connects to database
+- [ ] Worker can process tracks without race conditions
+- [ ] No panic or error logs in worker/api
+- [ ] Python/librosa dependencies working in worker image
+
+**6. Clean Up After Testing:**
+
+```bash
+# Stop all services
+docker-compose down
+
+# Optional: Remove test images
+docker rmi doyou-analytics-api:local doyou-analytics-worker:local
+
+# Optional: Reset test database
+docker-compose down -v  # Removes volumes (deletes data)
+```
+
+### Only Push After Validation ✅
+
+```bash
+# After all checks pass
+git add .
+git commit -m "feat: your feature description"
+git push origin main  # Triggers CI/CD → Watchtower deployment
+```
+
+> **Remember:** Every push to `main` triggers GitHub Actions build and Watchtower auto-deploys to Mac mini. Test locally first!
+
+---
+
 ## Initial Setup on Mac Mini
 
 > **Note:** Watchtower is already configured on your Mac mini! You only need to set up the analytics services.
