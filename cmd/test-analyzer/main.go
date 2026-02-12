@@ -15,7 +15,7 @@ import (
 
 func main() {
 	fmt.Println("DoYou Music Analytics - Analyzer Test")
-	fmt.Println("======================================\n")
+	fmt.Println("======================================")
 
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run cmd/test-analyzer/main.go <mp3-file>")

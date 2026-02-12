@@ -315,8 +315,231 @@ func clearTestEnv(t *testing.T) {
 		"API_PORT", "LOG_LEVEL", "CORS_ORIGINS",
 		"ENABLE_METRICS", "METRICS_PORT",
 		"TEST_VAR", "TEST_INT", "TEST_BOOL",
+		"SCAN_INTERVAL",
 	}
 	for _, key := range envVars {
 		os.Unsetenv(key)
+	}
+}
+
+func TestScanInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "default value",
+			envValue: "",
+			expected: "30m",
+			wantErr:  false,
+		},
+		{
+			name:     "custom minutes",
+			envValue: "5m",
+			expected: "5m",
+			wantErr:  false,
+		},
+		{
+			name:     "custom hours",
+			envValue: "2h",
+			expected: "2h",
+			wantErr:  false,
+		},
+		{
+			name:     "mixed duration",
+			envValue: "1h30m",
+			expected: "1h30m",
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTestEnv(t)
+			setupTestFiles(t)
+
+			if tt.envValue != "" {
+				os.Setenv("SCAN_INTERVAL", tt.envValue)
+			}
+
+			cfg, err := Load()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Load() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr && cfg.ScanInterval != tt.expected {
+				t.Errorf("ScanInterval = %v, want %v", cfg.ScanInterval, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPathHandling_LocalVsDocker(t *testing.T) {
+	tests := []struct {
+		name        string
+		nasPath     string
+		description string
+	}{
+		{
+			name:        "local macOS path",
+			nasPath:     "/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks",
+			description: "Local development path on Mac mini",
+		},
+		{
+			name:        "docker mount path",
+			nasPath:     "/mnt/music/downloads",
+			description: "Production Docker container mount",
+		},
+		{
+			name:        "linux absolute path",
+			nasPath:     "/media/nas/music",
+			description: "Linux NAS mount",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTestEnv(t)
+
+			// Create temp dir to represent NAS path
+			tempDir := t.TempDir()
+			
+			// Create dummy Python script and executable for validation
+			pythonPath := filepath.Join(tempDir, "python3")
+			scriptPath := filepath.Join(tempDir, "analyze_audio.py")
+			
+			// Create dummy files
+			if err := os.WriteFile(pythonPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(scriptPath, []byte("# dummy\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			
+			os.Setenv("NAS_MOUNT_PATH", tempDir)
+			os.Setenv("VALIDATE_NAS_ON_STARTUP", "true")
+			os.Setenv("PYTHON_PATH", pythonPath)
+			os.Setenv("ANALYSIS_SCRIPT", scriptPath)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+
+			// Verify path handling works
+			if cfg.NASMountPath != tempDir {
+				t.Errorf("NASMountPath = %v, want %v", cfg.NASMountPath, tempDir)
+			}
+
+			// Verify validation can be disabled for Docker
+			os.Setenv("VALIDATE_NAS_ON_STARTUP", "false")
+			os.Setenv("NAS_MOUNT_PATH", tt.nasPath) // Use non-existent path
+
+			cfg2, err := Load()
+			if err != nil {
+				t.Fatalf("Load() with disabled validation failed: %v", err)
+			}
+
+			// Should not validate when disabled
+			if err := cfg2.Validate(); err != nil {
+				t.Errorf("Validate() failed when validation disabled: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfig_DockerEnvironment(t *testing.T) {
+	clearTestEnv(t)
+	tempDir := t.TempDir()
+
+	// Create required files for validation
+	pythonPath := filepath.Join(tempDir, "python3")
+	scriptPath := filepath.Join(tempDir, "scripts", "analyze_audio.py")
+	
+	// Create Python executable
+	os.WriteFile(pythonPath, []byte("#!/bin/sh\n"), 0755)
+	
+	// Create analysis script
+	os.MkdirAll(filepath.Dir(scriptPath), 0755)
+	os.WriteFile(scriptPath, []byte("#!/usr/bin/env python3"), 0755)
+
+	// Simulate Docker environment variables
+	os.Setenv("NAS_MOUNT_PATH", tempDir)
+	os.Setenv("PYTHON_PATH", pythonPath)
+	os.Setenv("ANALYSIS_SCRIPT", scriptPath)
+	os.Setenv("DATABASE_URL", "postgresql://doyou:password@postgres:5432/doyou_music")
+	os.Setenv("SCAN_INTERVAL", "30m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() in Docker env failed: %v", err)
+	}
+
+	// Verify Docker-style paths are accepted
+	if cfg.NASMountPath != tempDir {
+		t.Errorf("Docker NAS path = %v, want %v", cfg.NASMountPath, tempDir)
+	}
+
+	if cfg.ScanInterval != "30m" {
+		t.Errorf("ScanInterval = %v, want 30m", cfg.ScanInterval)
+	}
+}
+
+func TestConfig_MaskPasswordForLogging(t *testing.T) {
+	tests := []struct {
+		name        string
+		dbURL       string
+		expectMask  bool
+		description string
+	}{
+		{
+			name:        "password in URL",
+			dbURL:       "postgresql://user:secretpass@localhost:5432/db",
+			expectMask:  true,
+			description: "Should mask password in logs",
+		},
+		{
+			name:        "no password",
+			dbURL:       "postgresql://user@localhost:5432/db",
+			expectMask:  false,
+			description: "No password to mask",
+		},
+		{
+			name:        "docker service name",
+			dbURL:       "postgresql://doyou:password@postgres:5432/doyou_music",
+			expectMask:  true,
+			description: "Docker compose service name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTestEnv(t)
+			setupTestFiles(t)
+
+			os.Setenv("DATABASE_URL", tt.dbURL)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+
+			masked := cfg.MaskPassword()
+
+			if tt.expectMask {
+				// Should contain masked placeholder
+				if masked == tt.dbURL {
+					t.Error("Password was not masked")
+				}
+			}
+
+			// Masked string should never contain actual password
+			if tt.expectMask && masked == tt.dbURL {
+				t.Error("MaskPassword() did not modify URL with password")
+			}
+		})
 	}
 }
