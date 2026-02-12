@@ -32,7 +32,7 @@ See [docs/ANALYTICS_ARCHITECTURE.md](docs/ANALYTICS_ARCHITECTURE.md) for detaile
 
 - ✅ **Automatic NAS scanning** - Detects new tracks every 30 minutes
 - ✅ **Continuous processing** - 6 parallel workers, never stops
-- ✅ **Missing file cleanup** - Automatically detects and handles deleted files (mark or delete)
+- ✅ **Missing file cleanup** - Automatically detects and handles deleted files (enabled by default, mark mode)
 - ✅ **13 audio features** - BPM, key, energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness, loudness, duration, mode
 - ✅ **REST API** - Query statistics and analyzed tracks
 - ✅ **PostgreSQL storage** - Atomic operations, no race conditions
@@ -137,17 +137,17 @@ The worker can automatically detect and handle files that no longer exist on the
 
 **Configuration:**
 ```bash
-ENABLE_CLEANUP=true           # Enable cleanup (default: false)
+ENABLE_CLEANUP=true           # Enable cleanup (default: true)
 CLEANUP_ACTION=mark           # "mark" or "delete" (default: mark)
 CLEANUP_INTERVAL=24h          # How often to check (default: 24h)
 ```
 
 **Cleanup Actions:**
-- **`mark`** (recommended): Sets `analysis_status='missing'` and adds error message. Preserves history for reference.
+- **`mark`** (recommended, default): Sets `analysis_status='missing'` and adds error message. Preserves history for reference.
 - **`delete`**: Permanently removes track records from database. Use with caution.
 
 **Default Behavior:**
-- Disabled by default (opt-in for safety)
+- Enabled by default with "mark" action (safe, preserves history)
 - First cleanup runs 5 minutes after worker starts
 - Subsequent cleanups run on the configured interval
 - Logs all cleanup operations (marked/deleted counts)

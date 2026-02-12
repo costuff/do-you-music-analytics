@@ -148,7 +148,7 @@ func main() {
 			}
 		}()
 	} else {
-		log.Info("🧹 Cleanup disabled (use ENABLE_CLEANUP=true to enable)")
+		log.Info("🧹 Cleanup disabled (set ENABLE_CLEANUP=false if intentional)")
 	}
 
 	// Start periodic scanner in background

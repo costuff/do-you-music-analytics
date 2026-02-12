@@ -103,11 +103,11 @@ doyou-music-analytics/
 - Automatic retry on failure
 - Progress logging with track details
 
-### 4. Automatic Cleanup (Optional)
+### 4. Automatic Cleanup
 - Detects files deleted from NAS
 - Two modes: "mark" (set status='missing') or "delete" (remove from DB)
 - Configurable interval (default: 24h)
-- Disabled by default for safety
+- Enabled by default with "mark" action (safe, preserves history)
 - Keeps statistics accurate
 
 ### 5. REST API

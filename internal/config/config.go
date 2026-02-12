@@ -59,7 +59,7 @@ func Load() (*Config, error) {
 		ScanInterval:    getEnv("SCAN_INTERVAL", "30m"),
 		
 		// Cleanup
-		EnableCleanup:   getEnvBool("ENABLE_CLEANUP", false),
+		EnableCleanup:   getEnvBool("ENABLE_CLEANUP", true),
 		CleanupAction:   getEnv("CLEANUP_ACTION", "mark"),    // "mark" or "delete"
 		CleanupInterval: getEnv("CLEANUP_INTERVAL", "24h"), // Scan for new tracks every 30 minutes
 		
