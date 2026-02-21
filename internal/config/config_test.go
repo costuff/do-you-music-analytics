@@ -406,11 +406,11 @@ func TestPathHandling_LocalVsDocker(t *testing.T) {
 
 			// Create temp dir to represent NAS path
 			tempDir := t.TempDir()
-			
+
 			// Create dummy Python script and executable for validation
 			pythonPath := filepath.Join(tempDir, "python3")
 			scriptPath := filepath.Join(tempDir, "analyze_audio.py")
-			
+
 			// Create dummy files
 			if err := os.WriteFile(pythonPath, []byte("#!/bin/sh\n"), 0755); err != nil {
 				t.Fatal(err)
@@ -418,7 +418,7 @@ func TestPathHandling_LocalVsDocker(t *testing.T) {
 			if err := os.WriteFile(scriptPath, []byte("# dummy\n"), 0644); err != nil {
 				t.Fatal(err)
 			}
-			
+
 			os.Setenv("NAS_MOUNT_PATH", tempDir)
 			os.Setenv("VALIDATE_NAS_ON_STARTUP", "true")
 			os.Setenv("PYTHON_PATH", pythonPath)
@@ -458,10 +458,10 @@ func TestConfig_DockerEnvironment(t *testing.T) {
 	// Create required files for validation
 	pythonPath := filepath.Join(tempDir, "python3")
 	scriptPath := filepath.Join(tempDir, "scripts", "analyze_audio.py")
-	
+
 	// Create Python executable
 	os.WriteFile(pythonPath, []byte("#!/bin/sh\n"), 0755)
-	
+
 	// Create analysis script
 	os.MkdirAll(filepath.Dir(scriptPath), 0755)
 	os.WriteFile(scriptPath, []byte("#!/usr/bin/env python3"), 0755)

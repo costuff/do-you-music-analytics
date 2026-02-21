@@ -7,7 +7,6 @@ This guide covers deploying the DoYou Music Analytics service to your Mac mini (
 ## Quick Start (TL;DR)
 
 **On Mac mini (Watchtower already configured ✅):**
-```bash
 # 1. Clone and setup
 git clone https://github.com/costuff/do-you-music-analytics.git
 cd do-you-music-analytics
@@ -229,7 +228,7 @@ POSTGRES_DB=doyou_music
 POSTGRES_PORT=5432
 
 # NAS Path (CRITICAL - adjust to your setup)
-NAS_MUSIC_PATH=/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
+NAS_MUSIC_PATH=/Volumes/Expansion/ExtHDD-8TB/Music/doyou-world-radio-tracks
 
 # Worker Configuration
 BATCH_SIZE=10           # Process 10 tracks at a time
