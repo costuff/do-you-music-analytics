@@ -68,7 +68,7 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int,
 	for _, filePath := range newFiles {
 		fileName := filepath.Base(filePath)
 		relPath, _ := filepath.Rel(musicDir, filePath)
-		
+
 		query := `
 			INSERT INTO tracks (file_path, file_name, analysis_status, downloaded_at)
 			VALUES ($1, $2, 'pending', NOW())
@@ -88,12 +88,12 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int,
 // Returns stats about what was cleaned up
 func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action string) (*ScanStats, error) {
 	stats := &ScanStats{}
-	
+
 	// Validate action
 	if action != "mark" && action != "delete" {
 		return nil, fmt.Errorf("invalid action: %s (must be 'mark' or 'delete')", action)
 	}
-	
+
 	// Get all tracks from database that aren't already marked as missing
 	query := `SELECT id, file_path FROM tracks WHERE analysis_status != 'missing'`
 	rows, err := db.pool.Query(ctx, query)
@@ -101,13 +101,13 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 		return nil, fmt.Errorf("failed to query tracks: %w", err)
 	}
 	defer rows.Close()
-	
+
 	type trackRecord struct {
 		id   int64
 		path string
 	}
 	var tracks []trackRecord
-	
+
 	for rows.Next() {
 		var t trackRecord
 		if err := rows.Scan(&t.id, &t.path); err != nil {
@@ -115,7 +115,7 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 		}
 		tracks = append(tracks, t)
 	}
-	
+
 	// Check if each file exists
 	for _, track := range tracks {
 		// Try both relative and absolute paths
@@ -124,7 +124,7 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 			// Also try the path as-is in case it's already absolute
 			if _, err := os.Stat(track.path); os.IsNotExist(err) {
 				stats.MissingTracks++
-				
+
 				if action == "mark" {
 					// Mark as missing
 					updateQuery := `
@@ -150,6 +150,6 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 			}
 		}
 	}
-	
+
 	return stats, nil
 }
