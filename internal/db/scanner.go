@@ -41,18 +41,22 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int,
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
-			// Get relative path from music directory
-			relPath, err := filepath.Rel(musicDir, path)
-			if err != nil {
-				return err
-			}
-			
-			// Check if this file is already in database
-			if !existingPaths[relPath] && !existingPaths[path] {
-				newFiles = append(newFiles, path)
-			}
-		}
+		   if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
+			   // Skip hidden/system files (e.g., .DS_Store, ._*)
+			   name := info.Name()
+			   if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
+				   return nil
+			   }
+			   // Get relative path from music directory
+			   relPath, err := filepath.Rel(musicDir, path)
+			   if err != nil {
+				   return err
+			   }
+			   // Check if this file is already in database
+			   if !existingPaths[relPath] && !existingPaths[path] {
+				   newFiles = append(newFiles, path)
+			   }
+		   }
 		return nil
 	})
 	if err != nil {

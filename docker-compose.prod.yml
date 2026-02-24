@@ -55,8 +55,8 @@ services:
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      # Mount NAS music directory (read-only)
-      - ${NAS_MUSIC_PATH}:/mnt/music/downloads:ro
+      # Mount NAS music directory (read-write)
+      - ${NAS_MUSIC_PATH}:/mnt/music/downloads:rw
     networks:
       - doyou-network
     labels:
