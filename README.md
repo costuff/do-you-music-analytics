@@ -4,6 +4,15 @@
 
 Companion service to [doyou-world-scraper](https://github.com/costuff/doyou-world-scraper) for continuous audio analysis of 9,875+ tracks using librosa.
 
+## Documentation
+
+- [Deployment Guide](docs/DEPLOYMENT.md)
+- [Testing Guide](docs/TESTING.md)
+- [Scraper Integration](docs/SCRAPER_INTEGRATION.md)
+- [Database Usage](docs/DATABASE_USAGE.md)
+- [Pre-Push Checklist](docs/PREPUSH_CHECKLIST.md)
+- [Roadmap / TODO](docs/TODO.md)
+
 ---
 
 ## Overview

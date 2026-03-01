@@ -181,6 +181,8 @@ git push origin main  # Triggers CI/CD → Watchtower deployment
 
 > **Remember:** Every push to `main` triggers GitHub Actions build and Watchtower auto-deploys to Mac mini. Test locally first!
 
+For a concise operational checklist, see [PREPUSH_CHECKLIST.md](PREPUSH_CHECKLIST.md).
+
 ---
 
 ## Initial Setup on Mac Mini

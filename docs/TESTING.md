@@ -126,6 +126,7 @@ ORDER BY t.analyzed_at DESC LIMIT 5;
 **CRITICAL:** Always test Docker builds locally before pushing!
 
 See [DEPLOYMENT.md](DEPLOYMENT.md#🧪-pre-push-local-testing) for detailed workflow.
+For the short operational version, see [PREPUSH_CHECKLIST.md](PREPUSH_CHECKLIST.md).
 
 **Quick checklist:**
 1. ✅ Run all tests: `go test ./...`
