@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ScanStats contains statistics from scanning operations
@@ -39,24 +41,30 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int,
 	var newFiles []string
 	err = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
+				if info != nil && info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 			return err
 		}
-		   if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
-			   // Skip hidden/system files (e.g., .DS_Store, ._*)
-			   name := info.Name()
-			   if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
-				   return nil
-			   }
-			   // Get relative path from music directory
-			   relPath, err := filepath.Rel(musicDir, path)
-			   if err != nil {
-				   return err
-			   }
-			   // Check if this file is already in database
-			   if !existingPaths[relPath] && !existingPaths[path] {
-				   newFiles = append(newFiles, path)
-			   }
-		   }
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
+			// Skip hidden/system files (e.g., .DS_Store, ._*)
+			name := info.Name()
+			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
+				return nil
+			}
+			// Get relative path from music directory
+			relPath, err := filepath.Rel(musicDir, path)
+			if err != nil {
+				return err
+			}
+			// Check if this file is already in database
+			if !existingPaths[relPath] && !existingPaths[path] {
+				newFiles = append(newFiles, path)
+			}
+		}
 		return nil
 	})
 	if err != nil {
