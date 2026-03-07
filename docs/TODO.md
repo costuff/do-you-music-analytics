@@ -2,6 +2,14 @@
 
 Active roadmap for the analytics service, synchronized with the scraper integration state as of 2026-03-07.
 
+## Remaining Steps (Immediate)
+
+- [ ] Push package coverage toward 80%+ with priority on `internal/analyzer`, `internal/api`, `internal/db`
+- [ ] Implement export endpoints (CSV/JSON) for analyzed tracks with practical filters
+- [ ] Add safe bulk re-analysis flow for failed/outdated tracks (dry-run + progress)
+- [ ] Improve worker observability (throughput/error metrics) and retry/backoff behavior
+- [ ] Keep integration contracts stable for scraper dashboard consumption (`/stats`, `/stats/detailed`, `/tracks`)
+
 ## Next Up (Ordered)
 
 1. [ ] **Coverage push to 80%+ (priority)**
