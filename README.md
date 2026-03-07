@@ -7,6 +7,7 @@ Companion service to [doyou-world-scraper](https://github.com/costuff/doyou-worl
 ## Documentation
 
 - [Deployment Guide](docs/DEPLOYMENT.md)
+- [Dual-Repo Development](docs/DUAL_REPO_DEVELOPMENT.md)
 - [Testing Guide](docs/TESTING.md)
 - [Scraper Integration](docs/SCRAPER_INTEGRATION.md)
 - [Database Usage](docs/DATABASE_USAGE.md)

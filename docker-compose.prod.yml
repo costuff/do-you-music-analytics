@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database (shared with scraper)
   postgres:
@@ -9,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-doyou_music}
       POSTGRES_USER: ${POSTGRES_USER:-doyou}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-REDACTED_ROTATED_CREDENTIAL}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
@@ -33,7 +31,7 @@ services:
         condition: service_healthy
     environment:
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-doyou}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-doyou_music}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-doyou}:${POSTGRES_PASSWORD:-REDACTED_ROTATED_CREDENTIAL}@postgres:5432/${POSTGRES_DB:-doyou_music}
       
       # Storage
       NAS_MOUNT_PATH: /mnt/music/downloads
@@ -56,7 +54,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # Mount NAS music directory (read-write)
-      - ${NAS_MUSIC_PATH}:/mnt/music/downloads:rw
+      - ${NAS_MUSIC_PATH:-/mnt/music}:/mnt/music/downloads:rw
     networks:
       - doyou-network
     labels:
@@ -78,7 +76,7 @@ services:
         condition: service_healthy
     environment:
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-doyou}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-doyou_music}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-doyou}:${POSTGRES_PASSWORD:-REDACTED_ROTATED_CREDENTIAL}@postgres:5432/${POSTGRES_DB:-doyou_music}
       
       # API Configuration
       PORT: ${API_PORT:-8080}
@@ -93,7 +91,7 @@ services:
       - "${API_PORT:-8080}:8080"
     volumes:
       # Mount NAS music directory (read-only) for validation
-      - ${NAS_MUSIC_PATH}:/mnt/music/downloads:ro
+      - ${NAS_MUSIC_PATH:-/mnt/music}:/mnt/music/downloads:ro
     networks:
       - doyou-network
     labels:

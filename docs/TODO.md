@@ -1,32 +1,42 @@
 # DoYou Music Analytics TODO
 
-This file tracks the active roadmap for analytics development.
+Active roadmap for the analytics service, synchronized with the scraper integration state as of 2026-03-07.
 
-## Current Focus
+## Next Up (Ordered)
 
-- [ ] Raise package coverage toward 80%+ (priority: `internal/api`, `internal/analyzer`, `internal/db`)
-- [ ] Stabilize Docker/local parity for NAS mount and environment defaults
-- [ ] Keep scraper integration smooth (`/api/v1/stats`, `/api/v1/stats/detailed`, `/api/v1/tracks`)
+1. [ ] **Coverage push to 80%+ (priority)**
+	- `internal/analyzer`: add failure-mode tests (python errors, invalid JSON, timeout paths)
+	- `internal/api`: add more pagination/filter/error response tests
+	- `internal/db`: expand claim/retry/missing-status integration scenarios
+2. [ ] **Export API (phase 7)**
+	- Add CSV + JSON exports for analyzed tracks
+	- Support filters (`status`, pagination, optional feature thresholds)
+3. [ ] **Bulk re-analysis endpoint (phase 8)**
+	- Trigger re-analysis for `failed` and optionally `completed` older than threshold
+	- Include dry-run mode and progress reporting
+4. [ ] **Worker observability and resilience**
+	- Add clearer progress metrics in logs (claimed/processed/failed rates)
+	- Tune retry/backoff for transient analyzer failures
+5. [ ] **Dual-repo dev ergonomics**
+	- Keep local workflow docs aligned with scraper integration
+	- Maintain shared expectations for ports and env values
 
-## Platform and Reliability
+## Integration Contracts to Keep Stable
 
-- [ ] Add stronger worker observability (structured progress + error-rate metrics)
-- [ ] Add retry/backoff policy tuning for transient analyzer errors
-- [ ] Add operational runbook section for cleanup/scan tuning
+- [ ] Preserve response compatibility for:
+  - `GET /api/v1/stats`
+  - `GET /api/v1/stats/detailed`
+  - `GET /api/v1/tracks`
+- [ ] Re-validate CORS and connectivity against scraper frontend (`http://localhost:5173`) after API changes
 
-## API and Product
+## Documentation and Tooling
 
-- [ ] Add optional filters to tracks listing (feature thresholds and sort presets)
-- [ ] Add export endpoint for analyzed tracks (CSV/JSON)
-- [ ] Add endpoint for bulk re-analysis targeting failed/outdated tracks
-
-## Quality and Tooling
-
-- [ ] Enforce linting in CI with current golangci-lint config
-- [ ] Keep `docs/PREPUSH_CHECKLIST.md` aligned with real local workflow
-- [ ] Refresh docs examples when endpoint behavior changes
+- [ ] Keep `docs/PREPUSH_CHECKLIST.md` and runtime docs synchronized
+- [ ] Enforce linting with current `golangci-lint` configuration in CI
+- [ ] Add short operator runbook for cleanup and scan cadence tuning
 
 ## Completed Recently
 
 - [x] Updated NAS path handling and scanner stability in production compose
 - [x] Added explicit pre-push checklist for local validation before pipeline use
+- [x] Established dual-repo local workflow guidance for analytics + scraper development
