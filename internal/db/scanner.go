@@ -18,9 +18,59 @@ type ScanStats struct {
 	Deleted       int
 }
 
-// ScanAndImportNewTracks scans the music directory for MP3 files and imports new ones
-// Returns the number of newly imported tracks
-func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int, error) {
+// scanMP3Files returns all MP3 files in musicDir.
+// When shallow is true only the top-level directory is read — fast over SMB/NFS mounts.
+// When shallow is false a full recursive walk is performed for local/production use.
+// Hidden files (prefixed with "." or "._") are always skipped.
+func scanMP3Files(musicDir string, shallow bool) ([]string, error) {
+	if shallow {
+		entries, err := os.ReadDir(musicDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read directory: %w", err)
+		}
+		var files []string
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
+				continue
+			}
+			if strings.HasSuffix(strings.ToLower(name), ".mp3") {
+				files = append(files, filepath.Join(musicDir, name))
+			}
+		}
+		return files, nil
+	}
+	var files []string
+	err := filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
+				if info != nil && info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return err
+		}
+		name := info.Name()
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(name), ".mp3") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
+}
+
+// ScanAndImportNewTracks scans the music directory for MP3 files and imports new ones.
+// When shallowScan is true, only the top-level directory is read (no recursion) — use this
+// over slow network mounts (SMB/NFS). When false, a full recursive walk is performed.
+// Returns the number of newly imported tracks.
+func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string, shallowScan bool) (int, error) {
 	// Get all existing file paths from database
 	existingPaths := make(map[string]bool)
 	rows, err := db.pool.Query(ctx, "SELECT file_path FROM tracks")
@@ -37,38 +87,18 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string) (int,
 		existingPaths[path] = true
 	}
 
-	// Scan directory for MP3 files
-	var newFiles []string
-	err = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
-				if info != nil && info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			return err
-		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp3") {
-			// Skip hidden/system files (e.g., .DS_Store, ._*)
-			name := info.Name()
-			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "._") {
-				return nil
-			}
-			// Get relative path from music directory
-			relPath, err := filepath.Rel(musicDir, path)
-			if err != nil {
-				return err
-			}
-			// Check if this file is already in database
-			if !existingPaths[relPath] && !existingPaths[path] {
-				newFiles = append(newFiles, path)
-			}
-		}
-		return nil
-	})
+	allFiles, err := scanMP3Files(musicDir, shallowScan)
 	if err != nil {
-		return 0, fmt.Errorf("failed to scan directory: %w", err)
+		return 0, err
+	}
+
+	// Filter out files that already exist in the database
+	var newFiles []string
+	for _, filePath := range allFiles {
+		relPath, _ := filepath.Rel(musicDir, filePath)
+		if !existingPaths[relPath] && !existingPaths[filePath] && !existingPaths[filepath.Base(filePath)] {
+			newFiles = append(newFiles, filePath)
+		}
 	}
 
 	// Import new files

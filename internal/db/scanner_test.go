@@ -332,7 +332,7 @@ func TestScanAndImportNewTracks_Integration(t *testing.T) {
 	}
 
 	// Run scan and import
-	imported, err := database.ScanAndImportNewTracks(ctx, tempDir)
+	imported, err := database.ScanAndImportNewTracks(ctx, tempDir, false)
 	if err != nil {
 		t.Fatalf("ScanAndImportNewTracks failed: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestScanAndImportNewTracks_Integration(t *testing.T) {
 	}
 
 	// Run again - should import 0 (no new files)
-	imported2, err := database.ScanAndImportNewTracks(ctx, tempDir)
+	imported2, err := database.ScanAndImportNewTracks(ctx, tempDir, false)
 	if err != nil {
 		t.Fatalf("Second scan failed: %v", err)
 	}
@@ -553,5 +553,166 @@ func TestCleanupMissingTracks_SkipsExisting(t *testing.T) {
 
 	if status != "pending" {
 		t.Errorf("Expected status 'pending', got '%s'", status)
+	}
+}
+
+// ── Pure unit tests for scanMP3Files (no database required) ──────────────────
+
+func TestScanMP3Files_Shallow_SkipsSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "top.mp3"))
+	writeFile(t, filepath.Join(subDir, "nested.mp3"))
+
+	files, err := scanMP3Files(dir, true)
+	if err != nil {
+		t.Fatalf("scanMP3Files shallow error: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("shallow scan: expected 1 file, got %d (%v)", len(files), files)
+	}
+	if filepath.Base(files[0]) != "top.mp3" {
+		t.Errorf("expected top.mp3, got %s", filepath.Base(files[0]))
+	}
+}
+
+func TestScanMP3Files_Deep_FindsNestedFiles(t *testing.T) {
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "artist", "album")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "top.mp3"))
+	writeFile(t, filepath.Join(subDir, "nested.mp3"))
+
+	files, err := scanMP3Files(dir, false)
+	if err != nil {
+		t.Fatalf("scanMP3Files deep error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("deep scan: expected 2 files, got %d (%v)", len(files), files)
+	}
+}
+
+func TestScanMP3Files_IgnoresHiddenFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "visible.mp3"))
+	writeFile(t, filepath.Join(dir, ".hidden.mp3"))
+	writeFile(t, filepath.Join(dir, "._applefile.mp3"))
+
+	for _, shallow := range []bool{true, false} {
+		files, err := scanMP3Files(dir, shallow)
+		if err != nil {
+			t.Fatalf("scanMP3Files error (shallow=%v): %v", shallow, err)
+		}
+		if len(files) != 1 {
+			t.Errorf("shallow=%v: expected 1 visible file, got %d (%v)", shallow, len(files), files)
+		}
+		if filepath.Base(files[0]) != "visible.mp3" {
+			t.Errorf("shallow=%v: expected visible.mp3, got %s", shallow, filepath.Base(files[0]))
+		}
+	}
+}
+
+func TestScanMP3Files_IgnoresNonMP3Files(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "track.mp3"))
+	writeFile(t, filepath.Join(dir, "cover.jpg"))
+	writeFile(t, filepath.Join(dir, "info.txt"))
+	writeFile(t, filepath.Join(dir, "track.flac"))
+	writeFile(t, filepath.Join(dir, "track.m4a"))
+
+	for _, shallow := range []bool{true, false} {
+		files, err := scanMP3Files(dir, shallow)
+		if err != nil {
+			t.Fatalf("scanMP3Files error (shallow=%v): %v", shallow, err)
+		}
+		if len(files) != 1 {
+			t.Errorf("shallow=%v: expected 1 MP3, got %d (%v)", shallow, len(files), files)
+		}
+	}
+}
+
+func TestScanMP3Files_EmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, shallow := range []bool{true, false} {
+		files, err := scanMP3Files(dir, shallow)
+		if err != nil {
+			t.Fatalf("scanMP3Files empty dir error (shallow=%v): %v", shallow, err)
+		}
+		if len(files) != 0 {
+			t.Errorf("shallow=%v: expected 0 files in empty dir, got %d", shallow, len(files))
+		}
+	}
+}
+
+func TestScanMP3Files_NonExistentDirectory(t *testing.T) {
+	for _, shallow := range []bool{true, false} {
+		_, err := scanMP3Files("/tmp/this_dir_does_not_exist_xyz123", shallow)
+		if err == nil {
+			t.Errorf("shallow=%v: expected error for non-existent dir, got nil", shallow)
+		}
+	}
+}
+
+func TestScanMP3Files_CaseInsensitiveExtension(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "lower.mp3"))
+	writeFile(t, filepath.Join(dir, "upper.MP3"))
+	writeFile(t, filepath.Join(dir, "mixed.Mp3"))
+
+	for _, shallow := range []bool{true, false} {
+		files, err := scanMP3Files(dir, shallow)
+		if err != nil {
+			t.Fatalf("scanMP3Files error (shallow=%v): %v", shallow, err)
+		}
+		if len(files) != 3 {
+			t.Errorf("shallow=%v: expected 3 files (case-insensitive), got %d", shallow, len(files))
+		}
+	}
+}
+
+func TestScanMP3Files_ShallowVsDeepCount(t *testing.T) {
+	dir := t.TempDir()
+	// 2 files at top level
+	writeFile(t, filepath.Join(dir, "a.mp3"))
+	writeFile(t, filepath.Join(dir, "b.mp3"))
+	// 3 files nested inside a subdirectory
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sub, "c.mp3"))
+	writeFile(t, filepath.Join(sub, "d.mp3"))
+	writeFile(t, filepath.Join(sub, "e.mp3"))
+
+	shallow, err := scanMP3Files(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deep, err := scanMP3Files(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(shallow) != 2 {
+		t.Errorf("shallow: expected 2 top-level files, got %d", len(shallow))
+	}
+	if len(deep) != 5 {
+		t.Errorf("deep: expected 5 total files, got %d", len(deep))
+	}
+}
+
+// writeFile creates a file with dummy content for testing.
+func writeFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("fake mp3 content"), 0644); err != nil {
+		t.Fatalf("writeFile(%s): %v", path, err)
 	}
 }

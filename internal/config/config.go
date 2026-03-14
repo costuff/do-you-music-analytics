@@ -15,6 +15,7 @@ type Config struct {
 	// Storage
 	NASMountPath         string
 	ValidateNASOnStartup bool
+	ShallowScan          bool // When true, only scan top-level dir (faster over SMB/network)
 
 	// Analysis
 	BatchSize       int
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 		// Storage
 		NASMountPath:         getEnv("NAS_MOUNT_PATH", "/mnt/music/downloads"),
 		ValidateNASOnStartup: getEnvBool("VALIDATE_NAS_ON_STARTUP", true),
+		ShallowScan:          getEnvBool("SHALLOW_SCAN", false), // set true in dev over SMB/network
 
 		// Analysis
 		BatchSize:       getEnvInt("BATCH_SIZE", 10),

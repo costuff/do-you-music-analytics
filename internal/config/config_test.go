@@ -543,3 +543,63 @@ func TestConfig_MaskPasswordForLogging(t *testing.T) {
 		})
 	}
 }
+func TestLoad_ShallowScan_DefaultFalse(t *testing.T) {
+	clearTestEnv(t)
+	setupTestFiles(t)
+	// Ensure env var is not set
+	os.Unsetenv("SHALLOW_SCAN")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.ShallowScan != false {
+		t.Errorf("ShallowScan default = %v, want false", cfg.ShallowScan)
+	}
+}
+
+func TestLoad_ShallowScan_EnvTrue(t *testing.T) {
+	clearTestEnv(t)
+	setupTestFiles(t)
+	os.Setenv("SHALLOW_SCAN", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.ShallowScan {
+		t.Errorf("ShallowScan = false, want true when SHALLOW_SCAN=true")
+	}
+}
+
+func TestLoad_ShallowScan_Env1(t *testing.T) {
+	clearTestEnv(t)
+	setupTestFiles(t)
+	os.Setenv("SHALLOW_SCAN", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.ShallowScan {
+		t.Errorf("ShallowScan = false, want true when SHALLOW_SCAN=1")
+	}
+}
+
+func TestLoad_ShallowScan_EnvFalse(t *testing.T) {
+	clearTestEnv(t)
+	setupTestFiles(t)
+	os.Setenv("SHALLOW_SCAN", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.ShallowScan {
+		t.Errorf("ShallowScan = true, want false when SHALLOW_SCAN=false")
+	}
+}

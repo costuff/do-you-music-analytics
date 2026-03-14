@@ -159,8 +159,12 @@ func main() {
 		defer scanTicker.Stop()
 
 		// Run initial scan immediately
-		log.Info("🔍 Running initial scan for new tracks...")
-		newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath)
+		scanMode := "full recursive"
+		if cfg.ShallowScan {
+			scanMode = "shallow (top-level only)"
+		}
+		log.Info(fmt.Sprintf("🔍 Running initial scan for new tracks [%s]...", scanMode))
+		newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath, cfg.ShallowScan)
 		if err != nil {
 			log.Error(fmt.Sprintf("Initial scan failed: %v", err))
 		} else if newTracks > 0 {
@@ -176,7 +180,7 @@ func main() {
 				return
 			case <-scanTicker.C:
 				log.Info("🔍 Scanning for new tracks...")
-				newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath)
+				newTracks, err := database.ScanAndImportNewTracks(shutdownCtx, cfg.NASMountPath, cfg.ShallowScan)
 				if err != nil {
 					log.Error(fmt.Sprintf("Scan failed: %v", err))
 				} else if newTracks > 0 {

@@ -41,7 +41,7 @@ func main() {
 	log.Info("Connected to DB")
 	log.Info("Scanning...")
 
-	mp3Files, err := findMP3Files(musicDir)
+	mp3Files, err := findMP3Files(musicDir, cfg.ShallowScan)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("Scan failed: %v", err))
 	}
@@ -57,11 +57,33 @@ func main() {
 	log.Info(fmt.Sprintf("Done: %d imported, %d skipped, %d failed", imported, skipped, failed))
 }
 
-func findMP3Files(rootDir string) ([]string, error) {
+func findMP3Files(rootDir string, shallow bool) ([]string, error) {
+	if shallow {
+		// Shallow: only read top-level directory — fast over network mounts
+		entries, err := os.ReadDir(rootDir)
+		if err != nil {
+			return nil, err
+		}
+		var files []string
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || strings.HasPrefix(name, ".") {
+				continue
+			}
+			if strings.HasSuffix(strings.ToLower(name), ".mp3") {
+				files = append(files, filepath.Join(rootDir, name))
+			}
+		}
+		return files, nil
+	}
+	// Verify the root directory exists before walking.
+	if _, err := os.Stat(rootDir); err != nil {
+		return nil, err
+	}
 	var files []string
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return nil // skip unreadable sub-entries
 		}
 		if strings.HasPrefix(info.Name(), ".") {
 			if info.IsDir() {
