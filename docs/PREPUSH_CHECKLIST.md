@@ -25,7 +25,8 @@ Use this checklist before every push to `main`.
 
 - [ ] Check stats endpoint: `curl http://localhost:8080/api/v1/stats`
 - [ ] Check detailed stats endpoint: `curl http://localhost:8080/api/v1/stats/detailed`
-- [ ] Confirm scraper dashboard can read analytics stats (`VITE_ANALYTICS_API_URL`)
+- [ ] Confirm scraper frontend can reach analytics locally via Vite proxy:
+  `curl http://localhost:5173/analytics-api/api/v1/stats` (requires scraper frontend running)
 
 ## 5) Push Readiness
 
@@ -35,6 +36,7 @@ Use this checklist before every push to `main`.
 
 ## 6) Post-Push Production Checks
 
-- [ ] Confirm GHCR images were published
-- [ ] Confirm Watchtower pulled and restarted containers
-- [ ] Confirm `/health` and `/api/v1/stats` are healthy in production
+- [ ] Confirm GHCR images were published (GitHub Actions green)
+- [ ] Confirm single Watchtower (in scraper stack) pulled and restarted containers: `docker logs --tail 30 watchtower`
+- [ ] Confirm analytics API healthy via scraper proxy: `curl https://do-you-world-scraper.costuff.work/analytics-api/api/v1/stats`
+- [ ] Confirm analytics stats visible in scraper dashboard UI

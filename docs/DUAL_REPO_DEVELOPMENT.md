@@ -2,13 +2,23 @@
 
 Use this when developing `doyou-music-analytics` and `doyou-world-scraper` together locally.
 
-## Local Topology
+## Topology
+
+### Local (development)
 
 - Analytics API: `http://localhost:8080`
 - Analytics DB: `localhost:5432`
 - Scraper API: `http://localhost:3002`
 - Scraper frontend: `http://localhost:5173`
-- Scraper frontend reads analytics from: `VITE_ANALYTICS_API_URL=http://localhost:8080`
+- Scraper frontend proxies analytics via: `/analytics-api` → `http://localhost:8080` (Vite proxy, automatic)
+
+### Production (Mac Mini)
+
+- Scraper API + Frontend: `https://do-you-world-scraper.costuff.work` (Cloudflare Tunnel)
+- Analytics API proxied at: `https://do-you-world-scraper.costuff.work/analytics-api/`
+- nginx in the scraper frontend container proxies `/analytics-api/` → `doyou-analytics-api:8080`
+- Frontend container is on both Docker networks (`doyou-world-scraper_doyou-network` + `doyou-network`)
+- Single Watchtower (scraper stack) monitors all containers on the machine
 
 ## Required Environment
 
@@ -21,11 +31,9 @@ CORS_ORIGINS=http://localhost:5173
 NAS_MOUNT_PATH=/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
 ```
 
-In scraper frontend `.env.local`:
-
-```bash
-VITE_ANALYTICS_API_URL=http://localhost:8080
-```
+**No `frontend/.env.local` needed.** The Vite dev server proxy in `scraper/vite.config.ts` automatically
+forwards `/analytics-api/*` → `http://localhost:8080/*`. The production scraper Dockerfile bakes
+`VITE_ANALYTICS_API_URL=/analytics-api` — no extra CI or env config needed.
 
 ## Startup Order
 
