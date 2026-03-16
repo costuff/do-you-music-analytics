@@ -156,35 +156,41 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 
 	// Check if each file exists
 	for _, track := range tracks {
-		// Try both relative and absolute paths
+		// The primary path to check: join music dir with the stored relative path
 		fullPath := filepath.Join(musicDir, track.path)
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			// Also try the path as-is in case it's already absolute
-			if _, err := os.Stat(track.path); os.IsNotExist(err) {
-				stats.MissingTracks++
+		_, err := os.Stat(fullPath)
+		fileExists := err == nil
 
-				if action == "mark" {
-					// Mark as missing
-					updateQuery := `
+		// If the stored path is already absolute, also try it as-is
+		if !fileExists && filepath.IsAbs(track.path) {
+			_, err2 := os.Stat(track.path)
+			fileExists = err2 == nil
+		}
+
+		if !fileExists {
+			stats.MissingTracks++
+
+			if action == "mark" {
+				// Mark as missing
+				updateQuery := `
 						UPDATE tracks 
 						SET analysis_status = 'missing',
 						    analysis_error = 'File no longer exists on filesystem'
 						WHERE id = $1
 					`
-					_, err := db.pool.Exec(ctx, updateQuery, track.id)
-					if err != nil {
-						return stats, fmt.Errorf("failed to mark track %d as missing: %w", track.id, err)
-					}
-					stats.MarkedMissing++
-				} else if action == "delete" {
-					// Delete from database
-					deleteQuery := `DELETE FROM tracks WHERE id = $1`
-					_, err := db.pool.Exec(ctx, deleteQuery, track.id)
-					if err != nil {
-						return stats, fmt.Errorf("failed to delete track %d: %w", track.id, err)
-					}
-					stats.Deleted++
+				_, err := db.pool.Exec(ctx, updateQuery, track.id)
+				if err != nil {
+					return stats, fmt.Errorf("failed to mark track %d as missing: %w", track.id, err)
 				}
+				stats.MarkedMissing++
+			} else if action == "delete" {
+				// Delete from database
+				deleteQuery := `DELETE FROM tracks WHERE id = $1`
+				_, err := db.pool.Exec(ctx, deleteQuery, track.id)
+				if err != nil {
+					return stats, fmt.Errorf("failed to delete track %d: %w", track.id, err)
+				}
+				stats.Deleted++
 			}
 		}
 	}
