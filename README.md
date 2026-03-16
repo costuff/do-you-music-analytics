@@ -118,7 +118,7 @@ See [.env.example](.env.example) for all configuration options.
 - `SCAN_INTERVAL`: Automatic scan frequency (default: 30m)
 - `ENABLE_CLEANUP`: Enable automatic cleanup of missing files (default: false)
 - `CLEANUP_ACTION`: How to handle missing files - "mark" or "delete" (default: mark)
-- `CLEANUP_INTERVAL`: Cleanup frequency (default: 24h)
+- `CLEANUP_INTERVAL`: Cleanup frequency (default: 10m)
 - `PYTHON_PATH`: Python 3.11+ executable path
 - `ANALYSIS_SCRIPT`: Path to analyze_audio.py
 
@@ -149,7 +149,7 @@ The worker can automatically detect and handle files that no longer exist on the
 ```bash
 ENABLE_CLEANUP=true           # Enable cleanup (default: true)
 CLEANUP_ACTION=mark           # "mark" or "delete" (default: mark)
-CLEANUP_INTERVAL=24h          # How often to check (default: 24h)
+CLEANUP_INTERVAL=10m          # How often to check (default: 10m)
 ```
 
 **Cleanup Actions:**

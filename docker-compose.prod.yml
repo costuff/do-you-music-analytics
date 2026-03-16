@@ -48,7 +48,7 @@ services:
       # Cleanup Configuration
       ENABLE_CLEANUP: ${ENABLE_CLEANUP:-true}
       CLEANUP_ACTION: ${CLEANUP_ACTION:-mark}
-      CLEANUP_INTERVAL: ${CLEANUP_INTERVAL:-24h}
+      CLEANUP_INTERVAL: ${CLEANUP_INTERVAL:-10m}
       
       # Logging
       LOG_LEVEL: ${LOG_LEVEL:-info}
