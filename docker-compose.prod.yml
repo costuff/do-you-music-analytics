@@ -97,25 +97,8 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  # Watchtower - Auto-update containers on new images
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: doyou-watchtower
-    restart: unless-stopped
-    environment:
-      WATCHTOWER_POLL_INTERVAL: 300  # Check every 5 minutes
-      WATCHTOWER_CLEANUP: "true"     # Remove old images
-      WATCHTOWER_INCLUDE_RESTARTING: "true"
-      WATCHTOWER_LABEL_ENABLE: "true"  # Only update labeled containers
-      WATCHTOWER_ROLLING_RESTART: "true"
-      WATCHTOWER_NOTIFICATIONS: ${WATCHTOWER_NOTIFICATIONS:-}
-      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
-      DOCKER_API_VERSION: "1.44"  # Force newer API version
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ~/.docker/config.json:/config.json:ro  # For authenticated pulls
-    networks:
-      - doyou-network
+  # Note: auto-updates handled by the watchtower container in the doyou-world-scraper stack
+  # (which monitors all containers on this machine)
 
 volumes:
   postgres_data:
