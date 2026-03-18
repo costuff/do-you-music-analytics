@@ -1,115 +1,538 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/costuff/doyou-music-analytics/internal/db"
 	"github.com/costuff/doyou-music-analytics/pkg/logger"
 )
 
-// TestHealthHandler tests the health check endpoint
+// mockTrackStore implements TrackStore for testing.
+type mockTrackStore struct {
+	getTrackStatsFunc           func(ctx context.Context) (map[string]int64, error)
+	listTracksFunc              func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
+	getTrackByIDFunc            func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
+	searchTracksFunc            func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
+	getFailedTracksFunc         func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getRecentCompletedTracksFunc func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+}
+
+func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
+	return m.getTrackStatsFunc(ctx)
+}
+func (m *mockTrackStore) ListTracks(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+	return m.listTracksFunc(ctx, limit, offset, status)
+}
+func (m *mockTrackStore) GetTrackByID(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error) {
+	return m.getTrackByIDFunc(ctx, trackID)
+}
+func (m *mockTrackStore) SearchTracks(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error) {
+	return m.searchTracksFunc(ctx, query, limit)
+}
+func (m *mockTrackStore) GetFailedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+	return m.getFailedTracksFunc(ctx, limit)
+}
+func (m *mockTrackStore) GetRecentCompletedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+	return m.getRecentCompletedTracksFunc(ctx, limit)
+}
+
+func newTestHandlers(store TrackStore) *Handlers {
+	return &Handlers{db: store, log: logger.New("info"), version: "1.0.0-test"}
+}
+
+// ---- HealthHandler ----
+
 func TestHealthHandler(t *testing.T) {
-	h := &Handlers{
-		db:      nil, // Health doesn't use DB
-		log:     logger.New("info"),
-		version: "1.0.0-test",
-	}
+	h := newTestHandlers(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
-
 	h.HealthHandler(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
+		t.Errorf("expected 200, got %d", w.Code)
 	}
 
-	var response map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// Check required fields
-	requiredFields := []string{"status", "version", "timestamp", "service"}
-	for _, field := range requiredFields {
-		if _, ok := response[field]; !ok {
-			t.Errorf("missing required field: %s", field)
+	for _, field := range []string{"status", "version", "timestamp", "service"} {
+		if _, ok := resp[field]; !ok {
+			t.Errorf("missing field: %s", field)
 		}
 	}
-
-	if response["version"] != "1.0.0-test" {
-		t.Errorf("expected version 1.0.0-test, got %v", response["version"])
+	if resp["version"] != "1.0.0-test" {
+		t.Errorf("version = %v, want 1.0.0-test", resp["version"])
 	}
-
-	if contentType := w.Header().Get("Content-Type"); contentType != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", contentType)
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", w.Header().Get("Content-Type"))
 	}
 }
 
-// TestGetTrackHandler_InvalidID tests invalid track ID handling
-func TestGetTrackHandler_InvalidID(t *testing.T) {
-	h := &Handlers{
-		db:      nil,
-		log:     logger.New("info"),
-		version: "1.0.0",
+// ---- StatsHandler ----
+
+func TestStatsHandler_Success(t *testing.T) {
+	store := &mockTrackStore{
+		getTrackStatsFunc: func(ctx context.Context) (map[string]int64, error) {
+			return map[string]int64{"total": 100, "pending": 50, "analyzing": 5, "completed": 40, "failed": 5}, nil
+		},
 	}
+	h := newTestHandlers(store)
 
-	tests := []struct {
-		name string
-		path string
-	}{
-		{"non-numeric ID", "/api/v1/tracks/abc"},
-		{"empty ID", "/api/v1/tracks/"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			w := httptest.NewRecorder()
-
-			h.GetTrackHandler(w, req)
-
-			if w.Code != http.StatusBadRequest {
-				t.Errorf("expected status 400, got %d", w.Code)
-			}
-
-			var response map[string]interface{}
-			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-				t.Fatalf("failed to decode response: %v", err)
-			}
-
-			if _, ok := response["error"]; !ok {
-				t.Error("expected error field in response")
-			}
-		})
-	}
-}
-
-// TestSearchTracksHandler_MissingQuery tests missing query parameter
-func TestSearchTracksHandler_MissingQuery(t *testing.T) {
-	h := &Handlers{
-		db:      nil,
-		log:     logger.New("info"),
-		version: "1.0.0",
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/search", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	w := httptest.NewRecorder()
+	h.StatsHandler(w, req)
 
-	h.SearchTracksHandler(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
 
-	var response map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
 	}
+	for _, field := range []string{"total", "pending", "analyzing", "completed", "failed"} {
+		if _, ok := resp[field]; !ok {
+			t.Errorf("missing field: %s", field)
+		}
+	}
+}
 
-	if _, ok := response["error"]; !ok {
+func TestStatsHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getTrackStatsFunc: func(ctx context.Context) (map[string]int64, error) {
+			return nil, errors.New("db connection lost")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	w := httptest.NewRecorder()
+	h.StatsHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if _, ok := resp["error"]; !ok {
 		t.Error("expected error field in response")
 	}
 }
+
+// ---- ListTracksHandler ----
+
+func TestListTracksHandler_Success(t *testing.T) {
+	tracks := []db.TrackWithFeatures{
+		{ID: 1, FileName: "track1.mp3", AnalysisStatus: "completed"},
+		{ID: 2, FileName: "track2.mp3", AnalysisStatus: "pending"},
+	}
+	store := &mockTrackStore{
+		listTracksFunc: func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return tracks, 2, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks", nil)
+	w := httptest.NewRecorder()
+	h.ListTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	for _, field := range []string{"tracks", "total", "limit", "offset"} {
+		if _, ok := resp[field]; !ok {
+			t.Errorf("missing field: %s", field)
+		}
+	}
+}
+
+func TestListTracksHandler_WithLimitOffset(t *testing.T) {
+	var capturedLimit, capturedOffset int
+	var capturedStatus string
+	store := &mockTrackStore{
+		listTracksFunc: func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			capturedLimit = limit
+			capturedOffset = offset
+			capturedStatus = status
+			return []db.TrackWithFeatures{}, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks?limit=10&offset=20&status=completed", nil)
+	w := httptest.NewRecorder()
+	h.ListTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	if capturedLimit != 10 {
+		t.Errorf("limit = %d, want 10", capturedLimit)
+	}
+	if capturedOffset != 20 {
+		t.Errorf("offset = %d, want 20", capturedOffset)
+	}
+	if capturedStatus != "completed" {
+		t.Errorf("status = %q, want completed", capturedStatus)
+	}
+}
+
+func TestListTracksHandler_InvalidLimit_UsesDefault(t *testing.T) {
+	var capturedLimit int
+	store := &mockTrackStore{
+		listTracksFunc: func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			capturedLimit = limit
+			return []db.TrackWithFeatures{}, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks?limit=999", nil)
+	w := httptest.NewRecorder()
+	h.ListTracksHandler(w, req)
+
+	// limit > 200 should fall back to default (50)
+	if capturedLimit != 50 {
+		t.Errorf("limit = %d, want 50 (default enforced for >200)", capturedLimit)
+	}
+}
+
+func TestListTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		listTracksFunc: func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return nil, 0, errors.New("query failed")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks", nil)
+	w := httptest.NewRecorder()
+	h.ListTracksHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// ---- GetTrackHandler ----
+
+func TestGetTrackHandler_InvalidID_NonNumeric(t *testing.T) {
+	h := newTestHandlers(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/abc", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetTrackHandler_EmptyID(t *testing.T) {
+	h := newTestHandlers(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetTrackHandler_Success(t *testing.T) {
+	now := time.Now()
+	track := &db.TrackWithFeatures{
+		ID: 42, FileName: "song.mp3", AnalysisStatus: "completed",
+		DownloadedAt: &now,
+	}
+	store := &mockTrackStore{
+		getTrackByIDFunc: func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error) {
+			if trackID != 42 {
+				return nil, errors.New("not found")
+			}
+			return track, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/42", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp db.TrackWithFeatures
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.ID != 42 {
+		t.Errorf("ID = %d, want 42", resp.ID)
+	}
+}
+
+func TestGetTrackHandler_NotFound(t *testing.T) {
+	store := &mockTrackStore{
+		getTrackByIDFunc: func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error) {
+			return nil, errors.New("failed to get track: no rows in result set")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/999", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackHandler(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+// ---- SearchTracksHandler ----
+
+func TestSearchTracksHandler_MissingQuery(t *testing.T) {
+	h := newTestHandlers(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/search", nil)
+	w := httptest.NewRecorder()
+	h.SearchTracksHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if _, ok := resp["error"]; !ok {
+		t.Error("expected error field in response")
+	}
+}
+
+func TestSearchTracksHandler_Success(t *testing.T) {
+	results := []db.TrackWithFeatures{{ID: 1, FileName: "found.mp3", AnalysisStatus: "completed"}}
+	store := &mockTrackStore{
+		searchTracksFunc: func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error) {
+			return results, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/search?q=found", nil)
+	w := httptest.NewRecorder()
+	h.SearchTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp["query"] != "found" {
+		t.Errorf("query = %v, want 'found'", resp["query"])
+	}
+	if count, ok := resp["count"].(float64); !ok || count != 1 {
+		t.Errorf("count = %v, want 1", resp["count"])
+	}
+}
+
+func TestSearchTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		searchTracksFunc: func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error) {
+			return nil, errors.New("search failed")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/search?q=test", nil)
+	w := httptest.NewRecorder()
+	h.SearchTracksHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestSearchTracksHandler_CustomLimit(t *testing.T) {
+	var capturedLimit int
+	store := &mockTrackStore{
+		searchTracksFunc: func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error) {
+			capturedLimit = limit
+			return []db.TrackWithFeatures{}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/search?q=test&limit=25", nil)
+	w := httptest.NewRecorder()
+	h.SearchTracksHandler(w, req)
+
+	if capturedLimit != 25 {
+		t.Errorf("limit = %d, want 25", capturedLimit)
+	}
+}
+
+// ---- FailedTracksHandler ----
+
+func TestFailedTracksHandler_Success(t *testing.T) {
+	errMsg := "librosa decode error"
+	tracks := []db.TrackWithFeatures{
+		{ID: 1, FileName: "bad.mp3", AnalysisStatus: "failed", AnalysisError: &errMsg},
+	}
+	store := &mockTrackStore{
+		getFailedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+			return tracks, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/failed", nil)
+	w := httptest.NewRecorder()
+	h.FailedTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if _, ok := resp["failed_tracks"]; !ok {
+		t.Error("missing failed_tracks field")
+	}
+	if count, ok := resp["count"].(float64); !ok || count != 1 {
+		t.Errorf("count = %v, want 1", resp["count"])
+	}
+}
+
+func TestFailedTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getFailedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+			return nil, errors.New("query error")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/failed", nil)
+	w := httptest.NewRecorder()
+	h.FailedTracksHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestFailedTracksHandler_CustomLimit(t *testing.T) {
+	var capturedLimit int
+	store := &mockTrackStore{
+		getFailedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+			capturedLimit = limit
+			return []db.TrackWithFeatures{}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/failed?limit=10", nil)
+	w := httptest.NewRecorder()
+	h.FailedTracksHandler(w, req)
+
+	if capturedLimit != 10 {
+		t.Errorf("limit = %d, want 10", capturedLimit)
+	}
+}
+
+// ---- DetailedStatsHandler ----
+
+func TestDetailedStatsHandler_Success(t *testing.T) {
+	now := time.Now()
+	store := &mockTrackStore{
+		getTrackStatsFunc: func(ctx context.Context) (map[string]int64, error) {
+			return map[string]int64{"total": 200, "pending": 100, "analyzing": 2, "completed": 90, "failed": 8}, nil
+		},
+		getRecentCompletedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+			return []db.TrackWithFeatures{
+				{ID: 1, AnalyzedAt: &now, DownloadedAt: &now},
+				{ID: 2, AnalyzedAt: &now, DownloadedAt: &now},
+			}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats/detailed", nil)
+	w := httptest.NewRecorder()
+	h.DetailedStatsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	for _, field := range []string{"total", "completed", "completion_percentage", "avg_processing_time_sec", "tracks_per_hour"} {
+		if _, ok := resp[field]; !ok {
+			t.Errorf("missing field: %s", field)
+		}
+	}
+	// 90 completed out of 200 total = 45%
+	if pct, ok := resp["completion_percentage"].(string); !ok || pct != "45.00" {
+		t.Errorf("completion_percentage = %v, want 45.00", resp["completion_percentage"])
+	}
+}
+
+func TestDetailedStatsHandler_ZeroTotal(t *testing.T) {
+	store := &mockTrackStore{
+		getTrackStatsFunc: func(ctx context.Context) (map[string]int64, error) {
+			return map[string]int64{"total": 0, "pending": 0, "analyzing": 0, "completed": 0, "failed": 0}, nil
+		},
+		getRecentCompletedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
+			return []db.TrackWithFeatures{}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats/detailed", nil)
+	w := httptest.NewRecorder()
+	h.DetailedStatsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if pct, ok := resp["completion_percentage"].(string); !ok || pct != "0.00" {
+		t.Errorf("completion_percentage = %v, want 0.00", resp["completion_percentage"])
+	}
+}
+
+func TestDetailedStatsHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getTrackStatsFunc: func(ctx context.Context) (map[string]int64, error) {
+			return nil, errors.New("stats query failed")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats/detailed", nil)
+	w := httptest.NewRecorder()
+	h.DetailedStatsHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+

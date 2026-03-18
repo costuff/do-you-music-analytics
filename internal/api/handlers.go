@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,13 +12,23 @@ import (
 	"github.com/costuff/doyou-music-analytics/pkg/logger"
 )
 
+// TrackStore defines the database operations required by the API handlers.
+type TrackStore interface {
+	GetTrackStats(ctx context.Context) (map[string]int64, error)
+	ListTracks(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
+	GetTrackByID(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
+	SearchTracks(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
+	GetFailedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	GetRecentCompletedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+}
+
 type Handlers struct {
-	db      *db.DB
+	db      TrackStore
 	log     *logger.Logger
 	version string
 }
 
-func NewHandlers(database *db.DB, log *logger.Logger, version string) *Handlers {
+func NewHandlers(database TrackStore, log *logger.Logger, version string) *Handlers {
 	return &Handlers{db: database, log: log, version: version}
 }
 

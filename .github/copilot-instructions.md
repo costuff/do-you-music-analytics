@@ -342,12 +342,12 @@ docker-compose down
 - Run: `go test ./...`
 - Coverage: `go test -cover ./...`
 - Count tests: `go test -v ./... 2>&1 | grep -c "^=== RUN"`
-  - **Current Stats**: 99 tests, ~50% average coverage
-    - internal/api: 30 tests, 29.7% coverage
-    - internal/analyzer: 1 test, 5.6% coverage
+  - **Current Stats**: 142 tests, ~70% average coverage
+    - internal/api: 23 tests, 91.5% coverage
+    - internal/analyzer: 10 tests, 100% coverage
     - internal/config: 11 tests, 91.9% coverage
-    - internal/db: 54 tests, ~40% coverage (includes scanner + cleanup tests, skipped without DATABASE_URL)
-    - pkg/logger: 4 tests, 32.8% coverage
+    - internal/db: 54 tests, ~10% coverage (skipped without DATABASE_URL)
+    - pkg/logger: 13 tests, 51.7% coverage
 
 **When Adding Features:**
 1. Write tests first (TDD approach preferred)
