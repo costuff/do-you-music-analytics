@@ -69,7 +69,7 @@
     {
       "label": "Start Analytics API (NAS mounted)",
       "type": "shell",
-      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/RemoteMusic/doyou-world-radio-tracks PORT=8080 API_PORT=8080 CORS_ORIGINS=http://localhost:5173 VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true LOG_LEVEL=info go run ./cmd/api",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/ExtHDD-8TB/Music PORT=8080 API_PORT=8080 CORS_ORIGINS=http://localhost:5173 VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true LOG_LEVEL=info go run ./cmd/api",
       "isBackground": true,
       "problemMatcher": {
         "pattern": { "regexp": "^(.*)$", "file": 1 },
@@ -84,7 +84,7 @@
     {
       "label": "Start Analytics Worker (NAS mounted)",
       "type": "shell",
-      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/RemoteMusic/doyou-world-radio-tracks PYTHON_PATH=./.venv/bin/python VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true MAX_WORKERS=2 ANALYSIS_TIMEOUT=90s SCAN_INTERVAL=6h ENABLE_CLEANUP=false go run ./cmd/worker",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/ExtHDD-8TB/Music PYTHON_PATH=./.venv/bin/python VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true MAX_WORKERS=2 ANALYSIS_TIMEOUT=90s SCAN_INTERVAL=6h ENABLE_CLEANUP=false go run ./cmd/worker",
       "isBackground": true,
       "problemMatcher": {
         "pattern": { "regexp": "^(.*)$", "file": 1 },
