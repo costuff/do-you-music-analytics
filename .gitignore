@@ -28,7 +28,7 @@ go.work
 
 # IDE
 .idea/
-.vscode/
+.vscode/*.code-workspace
 *.swp
 *.swo
 *~
@@ -67,3 +67,8 @@ temp/
 # OS
 Thumbs.db
 import-log.txt
+
+# Test track MP3s (generated locally with ffmpeg, not committed)
+test_tracks/*.mp3
+test_tracks/*.wav
+test_tracks/*.flac

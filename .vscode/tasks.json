@@ -1,0 +1,126 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Postgres",
+      "type": "shell",
+      "command": "bash scripts/start-local.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "infra" }
+    },
+    {
+      "label": "Stop Postgres",
+      "type": "shell",
+      "command": "docker compose stop postgres",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "infra" }
+    },
+    {
+      "label": "Generate Test Tracks",
+      "type": "shell",
+      "command": "bash scripts/generate-test-tracks.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Mount NAS",
+      "type": "shell",
+      "command": "bash scripts/mount-nas.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Unmount NAS",
+      "type": "shell",
+      "command": "bash scripts/unmount-nas.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Start Analytics API (local test tracks)",
+      "type": "shell",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=./test_tracks PORT=8080 API_PORT=8080 CORS_ORIGINS=http://localhost:5173 VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true LOG_LEVEL=debug go run ./cmd/api",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^(.*)$", "file": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting DoYou Music Analytics API.*$",
+          "endsPattern": "^.*API server listening on port.*$"
+        }
+      },
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "servers" }
+    },
+    {
+      "label": "Start Analytics Worker (local test tracks)",
+      "type": "shell",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=./test_tracks PYTHON_PATH=./.venv/bin/python VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true MAX_WORKERS=2 ANALYSIS_TIMEOUT=90s SCAN_INTERVAL=6h ENABLE_CLEANUP=false LOG_LEVEL=debug go run ./cmd/worker",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^(.*)$", "file": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting DoYou Music Analytics Worker.*$",
+          "endsPattern": "^.*Worker will run continuously.*$"
+        }
+      },
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "servers" }
+    },
+    {
+      "label": "Start Analytics API (NAS mounted)",
+      "type": "shell",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/RemoteMusic/doyou-world-radio-tracks PORT=8080 API_PORT=8080 CORS_ORIGINS=http://localhost:5173 VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true LOG_LEVEL=info go run ./cmd/api",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^(.*)$", "file": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting DoYou Music Analytics API.*$",
+          "endsPattern": "^.*API server listening on port.*$"
+        }
+      },
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "servers" }
+    },
+    {
+      "label": "Start Analytics Worker (NAS mounted)",
+      "type": "shell",
+      "command": "DATABASE_URL=postgresql://doyou:dev_password_change_me@localhost:5432/doyou_music NAS_MOUNT_PATH=/Volumes/RemoteMusic/doyou-world-radio-tracks PYTHON_PATH=./.venv/bin/python VALIDATE_NAS_ON_STARTUP=false SHALLOW_SCAN=true MAX_WORKERS=2 ANALYSIS_TIMEOUT=90s SCAN_INTERVAL=6h ENABLE_CLEANUP=false go run ./cmd/worker",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^(.*)$", "file": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting DoYou Music Analytics Worker.*$",
+          "endsPattern": "^.*Worker will run continuously.*$"
+        }
+      },
+      "presentation": { "reveal": "silent", "panel": "shared", "group": "servers" }
+    },
+    {
+      "label": "Run Tests",
+      "type": "shell",
+      "command": "go test ./... -count=1",
+      "problemMatcher": ["$go"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Run Tests with Coverage",
+      "type": "shell",
+      "command": "go test ./... -count=1 -cover",
+      "problemMatcher": ["$go"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Dev: Local Test Tracks (API + Worker)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Start Postgres", "Start Analytics API (local test tracks)", "Start Analytics Worker (local test tracks)"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: NAS Mode (API + Worker)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Mount NAS", "Start Postgres", "Start Analytics API (NAS mounted)", "Start Analytics Worker (NAS mounted)"],
+      "problemMatcher": []
+    }
+  ]
+}
