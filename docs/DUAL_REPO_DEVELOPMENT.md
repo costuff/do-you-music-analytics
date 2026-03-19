@@ -28,8 +28,16 @@ In analytics `.env`:
 DATABASE_URL=postgres://doyou:REDACTED_ROTATED_CREDENTIAL@localhost:5432/doyou_music?sslmode=disable
 API_PORT=8080
 CORS_ORIGINS=http://localhost:5173
-NAS_MOUNT_PATH=/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
+
+# Path to music on THIS machine (gitignored — each machine has its own .env)
+# Running with Docker: set NAS_MUSIC_PATH to the host path; NAS_MOUNT_PATH stays /mnt/music/downloads
+# Running without Docker (local Go binary): set NAS_MOUNT_PATH to wherever music is mounted locally
+NAS_MUSIC_PATH=/Volumes/Expansion/ExtHDD-8TB/Music   # host path → mounted into container
+NAS_MOUNT_PATH=/mnt/music/downloads                   # in-container path (or local path without Docker)
+VALIDATE_NAS_ON_STARTUP=false                         # set false when NAS isn't always mounted while developing
 ```
+
+The key point: **`.env` is gitignored and machine-local.** You just change `NAS_MUSIC_PATH` on each machine to wherever the music lives. The container always sees it at `/mnt/music/downloads`.
 
 **No `frontend/.env.local` needed.** The Vite dev server proxy in `scraper/vite.config.ts` automatically
 forwards `/analytics-api/*` → `http://localhost:8080/*`. The production scraper Dockerfile bakes
