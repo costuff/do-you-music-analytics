@@ -109,4 +109,3 @@ func TestGetZerolog(t *testing.T) {
 	// GetZerolog should return a usable zerolog.Logger
 	zl.Info().Msg("direct zerolog call")
 }
-

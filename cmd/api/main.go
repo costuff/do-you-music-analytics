@@ -57,6 +57,7 @@ func main() {
 	mux.HandleFunc("/api/v1/tracks/", routeTrackByID(handlers))
 	mux.HandleFunc("/api/v1/tracks/search", handlers.SearchTracksHandler)
 	mux.HandleFunc("/api/v1/tracks/failed", handlers.FailedTracksHandler)
+	mux.HandleFunc("/api/v1/emotions/distribution", handlers.GetEmotionsDistributionHandler)
 
 	// Apply middleware
 	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
@@ -97,7 +98,10 @@ func main() {
 	log.Info("Server stopped")
 }
 
-// routeTrackByID handles both /api/v1/tracks (list) and /api/v1/tracks/:id (get single)
+// routeTrackByID handles:
+//
+//	/api/v1/tracks/:id          → GetTrackHandler
+//	/api/v1/tracks/:id/emotions → GetTrackEmotionsHandler
 func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is /api/v1/tracks/:id or /api/v1/tracks/search or /api/v1/tracks/failed
@@ -112,6 +116,13 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 		// If path is "search" or "failed", those are handled by specific routes
 		if path == "search" || path == "failed" {
 			http.NotFound(w, r)
+			return
+		}
+
+		// Sub-resource: /api/v1/tracks/:id/emotions
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) == 2 && parts[1] == "emotions" {
+			handlers.GetTrackEmotionsHandler(w, r)
 			return
 		}
 

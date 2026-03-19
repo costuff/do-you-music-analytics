@@ -20,6 +20,8 @@ type TrackStore interface {
 	SearchTracks(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
 	GetFailedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
 	GetRecentCompletedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	GetEmotions(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
+	GetEmotionsDistribution(ctx context.Context) ([]db.EmotionDistribution, error)
 }
 
 type Handlers struct {
@@ -136,6 +138,43 @@ func (h *Handlers) FailedTracksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, map[string]interface{}{"failed_tracks": tracks, "count": len(tracks), "limit": limit})
+}
+
+// GetTrackEmotionsHandler handles GET /api/v1/tracks/:id/emotions
+func (h *Handlers) GetTrackEmotionsHandler(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/"), "/")
+	// expect ["<id>", "emotions"]
+	if len(pathParts) < 2 || pathParts[0] == "" {
+		JSONError(w, http.StatusBadRequest, "Track ID is required")
+		return
+	}
+	trackID, err := strconv.ParseInt(pathParts[0], 10, 64)
+	if err != nil {
+		JSONError(w, http.StatusBadRequest, "Invalid track ID")
+		return
+	}
+	emotions, err := h.db.GetEmotions(r.Context(), trackID)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("Failed to get emotions for track %d: %v", trackID, err))
+		JSONError(w, http.StatusInternalServerError, "Failed to retrieve emotions")
+		return
+	}
+	if emotions == nil {
+		JSONError(w, http.StatusNotFound, "Emotions not yet computed for this track")
+		return
+	}
+	JSON(w, http.StatusOK, emotions)
+}
+
+// GetEmotionsDistributionHandler handles GET /api/v1/emotions/distribution
+func (h *Handlers) GetEmotionsDistributionHandler(w http.ResponseWriter, r *http.Request) {
+	dist, err := h.db.GetEmotionsDistribution(r.Context())
+	if err != nil {
+		h.log.Error(fmt.Sprintf("Failed to get emotions distribution: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to retrieve emotions distribution")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{"distribution": dist, "count": len(dist)})
 }
 
 func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) {

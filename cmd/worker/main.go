@@ -297,6 +297,13 @@ func main() {
 					continue
 				}
 
+				// Compute and persist emotional dimensions (non-fatal: supplemental data)
+				emotions := db.ComputeEmotions(dbFeatures)
+				if err := database.SaveEmotions(shutdownCtx, &emotions); err != nil {
+					log.Error(fmt.Sprintf("Worker %d: Failed to save emotions for track %d: %v",
+						workerID, track.ID, err))
+				}
+
 				// Update status to completed
 				if err := database.UpdateTrackStatus(shutdownCtx, track.ID, "completed", nil); err != nil {
 					log.Error(fmt.Sprintf("Worker %d: Failed to update completion status: %v", workerID, err))

@@ -41,6 +41,111 @@ def timeout(seconds=30):
     return decorator
 
 
+def _compute_high_level_features(raw: Dict[str, Any], onset_env=None) -> Dict[str, float]:
+    """
+    Derive Spotify-like high-level features (all 0–1) from raw audio measurements.
+
+    All outputs are clamped to [0, 1].  The function is free of side effects and
+    can be called directly in unit tests without a real audio file.
+
+    Args:
+        raw:       The raw features dict produced by extract_audio_features()
+                   (may contain bpm, mode, spectral_centroid_mean, etc.).
+        onset_env: Optional numpy array of onset-strength frames (used for
+                   beat-regularity component of danceability).
+
+    Returns:
+        Dict with keys: energy, danceability, valence, acousticness,
+        instrumentalness, speechiness, liveness, melodicness.
+    """
+    result: Dict[str, float] = {}
+
+    # ── Energy: normalised RMS ────────────────────────────────────────────────
+    rms_mean = raw.get("rms_energy_mean")
+    result["energy"] = float(min(1.0, rms_mean * 2.5)) if rms_mean is not None else 0.0
+
+    # ── Danceability: BPM score + beat regularity ─────────────────────────────
+    # Old formula (1 - |bpm-125|/125) produced negative values for BPM ≥ 250
+    # and had no rhythm-regularity component.
+    bpm = raw.get("bpm")
+    if bpm:
+        # BPM score: peaks at 125 BPM; dividing by 200 keeps score ≥ 0 up to BPM=325
+        bpm_score = max(0.0, 1.0 - abs(bpm - 125) / 200)
+        # Beat regularity via onset-strength coefficient-of-variation (lower CoV = steadier beat)
+        if onset_env is not None and len(onset_env) > 0:
+            cov = float(np.std(onset_env)) / max(1e-8, float(np.mean(onset_env)))
+            regularity = max(0.0, 1.0 - min(1.0, cov * 0.4))
+        else:
+            regularity = 0.5
+        result["danceability"] = float(min(1.0, max(0.0, 0.6 * bpm_score + 0.4 * regularity)))
+    else:
+        result["danceability"] = 0.5
+
+    # ── Valence: brightness + energy + mode influence ──────────────────────────
+    # Old formula ignored mode entirely; major/minor is the strongest valence signal.
+    centroid = raw.get("spectral_centroid_mean")
+    if centroid is not None:
+        centroid_norm = min(1.0, centroid / 4000)
+        energy_factor = result["energy"]
+        mode = raw.get("mode")
+        mode_shift = 0.15 if mode == "major" else (-0.15 if mode == "minor" else 0.0)
+        result["valence"] = float(min(1.0, max(0.0,
+            centroid_norm * 0.5 + energy_factor * 0.3 + mode_shift)))
+    else:
+        result["valence"] = 0.5
+
+    # ── Acousticness: spectral flatness (better than inverse rolloff) ──────────
+    # Low flatness → tonal/acoustic; high flatness → noisy/electronic.
+    # Fallback to inverse rolloff if flatness is unavailable.
+    flatness = raw.get("spectral_flatness_mean")
+    if flatness is not None:
+        # Scale factor 8: flatness=0.001→0.99, flatness=0.125→0.0
+        result["acousticness"] = float(max(0.0, 1.0 - min(1.0, flatness * 8)))
+    elif raw.get("spectral_rolloff_mean") is not None:
+        rolloff_norm = min(1.0, raw["spectral_rolloff_mean"] / 8000)
+        result["acousticness"] = float(1.0 - rolloff_norm)
+    else:
+        result["acousticness"] = 0.5
+
+    # ── Instrumentalness: MFCC-1 variance + ZCR ───────────────────────────────
+    # Old formula used ZCR alone (and had the polarity wrong).
+    # Speech has high MFCC-1 std (≈15–35); instrumental music has lower std (≈3–12).
+    zcr_mean = raw.get("zero_crossing_rate_mean", 0.1)
+    mfcc1_std = raw.get("mfcc_1_std")
+    if mfcc1_std is not None:
+        mfcc1_speech = min(1.0, abs(float(mfcc1_std)) / 20.0)
+        zcr_weight   = min(1.0, float(zcr_mean) * 6)
+        speech_score = 0.65 * mfcc1_speech + 0.35 * zcr_weight
+        result["instrumentalness"] = float(max(0.0, 1.0 - min(1.0, speech_score)))
+    else:
+        zcr_norm = min(1.0, float(zcr_mean) * 5)
+        result["instrumentalness"] = float(max(0.0, 1.0 - zcr_norm * 0.7))
+
+    # ── Speechiness: RMS-energy variance ──────────────────────────────────────
+    rms_std = raw.get("rms_energy_std")
+    if rms_std is not None:
+        result["speechiness"] = float(min(1.0, rms_std * 5) * 0.6)
+    else:
+        result["speechiness"] = 1.0 - result.get("instrumentalness", 0.5)
+
+    # ── Liveness: RMS variance relative to mean ───────────────────────────────
+    if rms_std is not None and rms_mean is not None:
+        variance_ratio = float(rms_std) / max(0.01, float(rms_mean))
+        result["liveness"] = float(min(1.0, variance_ratio * 0.8))
+    else:
+        result["liveness"] = 0.3
+
+    # ── Melodicness: spectral centroid consistency ─────────────────────────────
+    centroid_std = raw.get("spectral_centroid_std")
+    if centroid is not None and centroid_std is not None:
+        centroid_consistency = 1.0 - min(1.0, float(centroid_std) / 2000)
+        result["melodicness"] = float(centroid_consistency * 0.8)
+    else:
+        result["melodicness"] = 0.5
+
+    return result
+
+
 def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool = False) -> Dict[str, Any]:
     """
     Extract comprehensive audio features from an audio file.
@@ -84,6 +189,7 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
     }
     
     # BPM (Tempo) - Use simpler onset-based method to avoid segfaults
+    onset_env = None  # retained for danceability beat-regularity computation below
     try:
         log("Extracting BPM...")
         # Use onset strength instead of full beat tracking (more stable)
@@ -127,9 +233,14 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
         spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
         features["spectral_centroid_mean"] = float(np.mean(spectral_centroids))
         features["spectral_centroid_std"] = float(np.std(spectral_centroids))
-        
+
         spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
         features["spectral_rolloff_mean"] = float(np.mean(spectral_rolloff))
+
+        # Spectral flatness: 0 = tonal/acoustic, 1 = noise-like/electronic.
+        # Used as the primary acousticness predictor (better than inverse rolloff).
+        spectral_flatness = librosa.feature.spectral_flatness(y=y)[0]
+        features["spectral_flatness_mean"] = float(np.mean(spectral_flatness))
         log("Spectral features extracted")
     except Exception as e:
         log(f"Spectral features failed: {e}")
@@ -173,73 +284,8 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
     # High-level Spotify-like features (computed from low-level features)
     try:
         log("Computing high-level features...")
-        
-        # Energy: Normalized RMS energy (0-1)
-        if "rms_energy_mean" in features:
-            # Normalize RMS to 0-1 range (typical RMS is 0-0.5 for music)
-            features["energy"] = float(min(1.0, features["rms_energy_mean"] * 2.5))
-        else:
-            features["energy"] = 0.0
-        
-        # Danceability: Based on tempo and beat strength
-        if "bpm" in features and features["bpm"]:
-            # Optimal dance BPM is 120-130, normalize around that
-            bpm = features["bpm"]
-            dance_score = 1.0 - abs(bpm - 125) / 125  # Peak at 125 BPM
-            dance_score = max(0.0, min(1.0, dance_score * 1.2))  # Scale and clamp
-            features["danceability"] = float(dance_score)
-        else:
-            features["danceability"] = 0.5
-        
-        # Valence: Based on spectral brightness and energy (mood/happiness)
-        if "spectral_centroid_mean" in features:
-            # Brighter sound (higher centroid) = more positive valence
-            centroid_norm = min(1.0, features["spectral_centroid_mean"] / 4000)
-            energy_factor = features.get("energy", 0.5)
-            features["valence"] = float((centroid_norm * 0.6 + energy_factor * 0.4))
-        else:
-            features["valence"] = 0.5
-        
-        # Acousticness: Inverse of spectral rolloff (0-1)
-        if "spectral_rolloff_mean" in features:
-            # Lower rolloff = more acoustic
-            rolloff_norm = min(1.0, features["spectral_rolloff_mean"] / 8000)
-            features["acousticness"] = float(1.0 - rolloff_norm)
-        else:
-            features["acousticness"] = 0.5
-        
-        # Instrumentalness: Based on zero crossing rate
-        # High ZCR suggests more instrumental content (less vocals)
-        if "zero_crossing_rate_mean" in features:
-            zcr_norm = min(1.0, features["zero_crossing_rate_mean"] * 5)
-            features["instrumentalness"] = float(zcr_norm * 0.7)  # Scale down
-        else:
-            features["instrumentalness"] = 0.5
-        
-        # Speechiness: Inverse of instrumentalness with RMS variance
-        if "rms_energy_std" in features:
-            # High RMS variance suggests more speech-like dynamics
-            rms_var_norm = min(1.0, features["rms_energy_std"] * 5)
-            features["speechiness"] = float(rms_var_norm * 0.6)
-        else:
-            features["speechiness"] = 1.0 - features.get("instrumentalness", 0.5)
-        
-        # Liveness: Based on RMS energy variance (live = more dynamic)
-        if "rms_energy_std" in features and "rms_energy_mean" in features:
-            # High variance relative to mean = more live feel
-            variance_ratio = features["rms_energy_std"] / max(0.01, features["rms_energy_mean"])
-            features["liveness"] = float(min(1.0, variance_ratio * 0.8))
-        else:
-            features["liveness"] = 0.3
-        
-        # Melodicness: Based on chroma consistency (harmonic content)
-        # Higher spectral centroid with lower variance = more melodic
-        if "spectral_centroid_mean" in features and "spectral_centroid_std" in features:
-            centroid_consistency = 1.0 - min(1.0, features["spectral_centroid_std"] / 2000)
-            features["melodicness"] = float(centroid_consistency * 0.8)
-        else:
-            features["melodicness"] = 0.5
-        
+        high_level = _compute_high_level_features(features, onset_env=onset_env)
+        features.update(high_level)
         log("High-level features computed")
     except Exception as e:
         log(f"High-level feature computation failed: {e}")

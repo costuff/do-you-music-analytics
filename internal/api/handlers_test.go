@@ -15,12 +15,14 @@ import (
 
 // mockTrackStore implements TrackStore for testing.
 type mockTrackStore struct {
-	getTrackStatsFunc           func(ctx context.Context) (map[string]int64, error)
-	listTracksFunc              func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
-	getTrackByIDFunc            func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
-	searchTracksFunc            func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
-	getFailedTracksFunc         func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
-	getRecentCompletedTracksFunc func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getTrackStatsFunc                func(ctx context.Context) (map[string]int64, error)
+	listTracksFunc                   func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
+	getTrackByIDFunc                 func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
+	searchTracksFunc                 func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
+	getFailedTracksFunc              func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getRecentCompletedTracksFunc     func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getEmotionsFunc                  func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
+	getEmotionsDistributionFunc      func(ctx context.Context) ([]db.EmotionDistribution, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -40,6 +42,18 @@ func (m *mockTrackStore) GetFailedTracks(ctx context.Context, limit int) ([]db.T
 }
 func (m *mockTrackStore) GetRecentCompletedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
 	return m.getRecentCompletedTracksFunc(ctx, limit)
+}
+func (m *mockTrackStore) GetEmotions(ctx context.Context, trackID int64) (*db.TrackEmotions, error) {
+	if m.getEmotionsFunc != nil {
+		return m.getEmotionsFunc(ctx, trackID)
+	}
+	return nil, nil
+}
+func (m *mockTrackStore) GetEmotionsDistribution(ctx context.Context) ([]db.EmotionDistribution, error) {
+	if m.getEmotionsDistributionFunc != nil {
+		return m.getEmotionsDistributionFunc(ctx)
+	}
+	return nil, nil
 }
 
 func newTestHandlers(store TrackStore) *Handlers {
@@ -536,3 +550,172 @@ func TestDetailedStatsHandler_DBError(t *testing.T) {
 	}
 }
 
+// ── GetTrackEmotionsHandler ──────────────────────────────────────────────────
+
+func TestGetTrackEmotionsHandler_Found(t *testing.T) {
+	wantEmotions := &db.TrackEmotions{
+		TrackID:    7,
+		Tension:    0.45,
+		Melancholy: 0.30,
+		Euphoria:   0.60,
+		Aggression: 0.25,
+		Serenity:   0.55,
+		Nostalgia:  0.40,
+		Sensuality: 0.50,
+		Power:      0.70,
+	}
+	store := &mockTrackStore{
+		getEmotionsFunc: func(_ context.Context, trackID int64) (*db.TrackEmotions, error) {
+			if trackID != 7 {
+				return nil, nil
+			}
+			return wantEmotions, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/7/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackEmotionsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var got db.TrackEmotions
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if got.TrackID != 7 {
+		t.Errorf("TrackID = %d, want 7", got.TrackID)
+	}
+	if got.Euphoria != wantEmotions.Euphoria {
+		t.Errorf("Euphoria = %f, want %f", got.Euphoria, wantEmotions.Euphoria)
+	}
+}
+
+func TestGetTrackEmotionsHandler_NotFound(t *testing.T) {
+	store := &mockTrackStore{
+		getEmotionsFunc: func(_ context.Context, _ int64) (*db.TrackEmotions, error) {
+			return nil, nil // track exists but emotions not computed yet
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/99/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackEmotionsHandler(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestGetTrackEmotionsHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getEmotionsFunc: func(_ context.Context, _ int64) (*db.TrackEmotions, error) {
+			return nil, errors.New("db error")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/1/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackEmotionsHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestGetTrackEmotionsHandler_InvalidID(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/abc/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackEmotionsHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetTrackEmotionsHandler_MissingID(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+
+	// Path with nothing after /tracks/
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks//emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetTrackEmotionsHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// ── GetEmotionsDistributionHandler ───────────────────────────────────────────
+
+func TestGetEmotionsDistributionHandler_Success(t *testing.T) {
+	dist := []db.EmotionDistribution{
+		{Dimension: "tension", Min: 0.1, Max: 0.9, Avg: 0.45, Count: 500},
+		{Dimension: "euphoria", Min: 0.2, Max: 0.95, Avg: 0.60, Count: 500},
+	}
+	store := &mockTrackStore{
+		getEmotionsDistributionFunc: func(_ context.Context) ([]db.EmotionDistribution, error) {
+			return dist, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions/distribution", nil)
+	w := httptest.NewRecorder()
+	h.GetEmotionsDistributionHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp["count"].(float64) != 2 {
+		t.Errorf("count = %v, want 2", resp["count"])
+	}
+	if _, ok := resp["distribution"]; !ok {
+		t.Error("response missing 'distribution' key")
+	}
+}
+
+func TestGetEmotionsDistributionHandler_Empty(t *testing.T) {
+	store := &mockTrackStore{
+		getEmotionsDistributionFunc: func(_ context.Context) ([]db.EmotionDistribution, error) {
+			return []db.EmotionDistribution{}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions/distribution", nil)
+	w := httptest.NewRecorder()
+	h.GetEmotionsDistributionHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestGetEmotionsDistributionHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getEmotionsDistributionFunc: func(_ context.Context) ([]db.EmotionDistribution, error) {
+			return nil, errors.New("connection lost")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions/distribution", nil)
+	w := httptest.NewRecorder()
+	h.GetEmotionsDistributionHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
