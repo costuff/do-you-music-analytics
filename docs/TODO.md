@@ -4,9 +4,10 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 
 ## Remaining Steps (Immediate)
 
-- [ ] **Fix feature extraction algorithm** — audit `scripts/analyze_audio.py` high-level feature formulas (energy, danceability, valence, etc.); these are hand-crafted approximations from librosa low-level output and need validation/tuning
+- [ ] **Fix/validate high-level feature formulas** — audit `scripts/analyze_audio.py`; valence/danceability/acousticness etc. are rough approximations; tune against tracks with known Spotify values; constants like `bpm−125` pivot are arbitrary
+- [ ] **Add emotion layer** — new `track_emotions` table with 8 dimensions: `tension`, `melancholy`, `euphoria`, `aggression`, `serenity`, `nostalgia`, `sensuality`, `power` (each 0–1); computed deterministically from audio features via a mapping matrix; expose `GET /api/v1/tracks/:id/emotions`
+- [ ] **Compute similarity graph** — `track_similarity` table `(track_a_id, track_b_id, score FLOAT)`; background Go job computes cosine similarity in emotion+feature space using k-nearest-neighbours (k=20); expose `GET /api/v1/tracks/:id/similar?n=10`
 - [ ] Push package coverage toward 80%+ with priority on `internal/analyzer`, `internal/api`, `internal/db`
-- [ ] Build music exploration visualization dashboard (scatter plots, histograms, interactive filters)
 - [ ] **Consolidate deployment** — create root-level `~/srv/docker-compose.prod.yml` using Compose `include:` to wire both stacks (one `docker compose up`, shared network, single watchtower); keep both repos independent
 - [ ] Implement export endpoints (CSV/JSON) for analyzed tracks with practical filters
 - [ ] Add safe bulk re-analysis flow for failed/outdated tracks (dry-run + progress)
@@ -19,36 +20,37 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 
 ## Next Up (Ordered)
 
-1. [ ] **Fix feature extraction algorithm (priority)**
-	- Audit `scripts/analyze_audio.py` high-level feature formulas against real track output
-	- Tune or replace hand-crafted librosa-derived formulas for energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness
-	- Add unit tests for analyzer output ranges and edge cases
-2. [ ] **Unit test coverage to 80%+**
+1. [ ] **Fix and validate high-level feature formulas**
+	- Audit `scripts/analyze_audio.py`; tune constants for energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness against tracks with known Spotify values
+	- Add unit tests for output ranges and edge cases
+2. [ ] **Emotion layer (new `track_emotions` table)**
+	- Dimensions: `tension`, `melancholy`, `euphoria`, `aggression`, `serenity`, `nostalgia`, `sensuality`, `power` (each 0–1)
+	- Deterministic mapping matrix: e.g. `euphoria = 0.4*valence + 0.3*energy + 0.2*danceability + 0.1*(1-speechiness)`
+	- Migration + Go struct + worker step after audio features saved
+	- API: `GET /api/v1/tracks/:id/emotions` + `GET /api/v1/emotions/distribution`
+	- Future: manual user tagging/correction from UI
+3. [ ] **Similarity graph computation**
+	- `track_similarity` table: `(track_a_id INT, track_b_id INT, score FLOAT, computed_at TIMESTAMP)`
+	- Background Go job: top-20 KNN per track by cosine similarity in 8-emotion space (~200K edges for 10K tracks)
+	- `POST /api/v1/similarity/recompute` + `GET /api/v1/tracks/:id/similar?n=10`
+4. [ ] **Unit test coverage to 80%+**
 	- `internal/analyzer`: failure-mode tests (python errors, invalid JSON, timeout paths)
 	- `internal/api`: pagination/filter/error response tests
 	- `internal/db`: claim/retry/missing-status integration scenarios
-3. [ ] **Music exploration graph / visualization dashboard**
-	- Scatter plot: Energy vs Danceability (per track, interactive)
-	- BPM distribution histogram
-	- Key/mode distribution (circle of fifths or bar chart)
-	- Timeline: tracks analyzed over time
-	- Filter by audio features (sliders or range inputs)
-	- Recommend similar tracks based on feature proximity
-4. [ ] **Consolidate deployment into root-level compose**
+5. [ ] **Consolidate deployment into root-level compose**
 	- Create `~/srv/docker-compose.prod.yml` using `include:` directive
 	- Move shared `doyou-network` and watchtower definitions to root file
-	- Remove per-stack network/watchtower duplication
 	- Single `docker compose -f ~/srv/docker-compose.prod.yml up -d` starts everything
-5. [ ] **Export API**
+6. [ ] **Export API**
 	- Add CSV + JSON exports for analyzed tracks
 	- Support filters (`status`, pagination, optional feature thresholds)
-6. [ ] **Bulk re-analysis endpoint**
+7. [ ] **Bulk re-analysis endpoint**
 	- Trigger re-analysis for `failed` and optionally `completed` older than threshold
 	- Include dry-run mode and progress reporting
-7. [ ] **Worker observability and resilience**
+8. [ ] **Worker observability and resilience**
 	- Add clearer progress metrics in logs (claimed/processed/failed rates)
 	- Tune retry/backoff for transient analyzer failures
-8. [ ] **Dual-repo dev ergonomics**
+9. [ ] **Dual-repo dev ergonomics**
 	- Keep local workflow docs aligned with scraper integration
 	- Maintain shared expectations for ports and env values
 
@@ -67,6 +69,10 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 - [ ] Add short operator runbook for cleanup and scan cadence tuning
 
 ## Completed Recently
+
+- [x] **Persisted raw audio features (v0.6.0, 2026-03-19)** — MFCCs (0–12 mean+std), spectral centroid/rolloff, ZCR, RMS energy were computed by librosa but silently discarded; migration 003 adds columns, `analyze_audio.py` now outputs them, `features.go` saves all 32 new fields
+- [x] **Mode detection (v0.6.0, 2026-03-19)** — Added Krumhansl-Kessler tonal hierarchy profiles to `analyze_audio.py`; mode (major/minor) and mode_confidence now computed and saved; `audio_features.mode` column was always there but never written to
+- [x] **Loudness dBFS (v0.6.0, 2026-03-19)** — `loudness_db` now computed from RMS mean (20·log₁₀); was in DB schema and Go struct but Python never emitted it
 
 - [x] **Fixed `CleanupMissingTracks` bug (2026-03-16)** — nested `os.IsNotExist` AND logic silently skipped all missing tracks; replaced with `fileExists` flag that only requires the primary `fullPath` stat to succeed
 - [x] **Set `CLEANUP_INTERVAL=10m` (2026-03-16)** — was `24h`; stale tracks now removed within 10 minutes of NAS deletion

@@ -135,9 +135,9 @@ func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
 func (db *DB) ListTracks(ctx context.Context, limit, offset int, status string) ([]TrackWithFeatures, int64, error) {
 	// Build query with optional status filter
 	query := `
-		SELECT t.id, t.file_path, t.file_name, t.analysis_status, t.analysis_error, 
+		SELECT t.id, t.file_path, t.file_name, t.analysis_status, t.analysis_error,
 		       t.downloaded_at, t.analyzed_at,
-		       af.bpm, af.key, af.duration_seconds, af.loudness_db,
+		       af.bpm, af.key, af.mode, af.duration_seconds, af.loudness_db,
 		       af.energy, af.danceability, af.speechiness, af.acousticness,
 		       af.instrumentalness, af.liveness, af.valence, af.melodicness
 		FROM tracks t
@@ -182,7 +182,7 @@ func (db *DB) ListTracks(ctx context.Context, limit, offset int, status string) 
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 			&track.DownloadedAt, &track.AnalyzedAt,
-			&features.BPM, &features.Key, &features.DurationSeconds, &features.LoudnessDB,
+			&features.BPM, &features.Key, &features.Mode, &features.DurationSeconds, &features.LoudnessDB,
 			&features.Energy, &features.Danceability, &features.Speechiness,
 			&features.Acousticness, &features.Instrumentalness, &features.Liveness,
 			&features.Valence, &features.Melodicness,
@@ -216,7 +216,7 @@ func (db *DB) GetTrackByID(ctx context.Context, trackID int64) (*TrackWithFeatur
 	query := `
 		SELECT t.id, t.file_path, t.file_name, t.analysis_status, t.analysis_error,
 		       t.downloaded_at, t.analyzed_at,
-		       af.bpm, af.key, af.duration_seconds, af.loudness_db,
+		       af.bpm, af.key, af.mode, af.duration_seconds, af.loudness_db,
 		       af.energy, af.danceability, af.speechiness, af.acousticness,
 		       af.instrumentalness, af.liveness, af.valence, af.melodicness
 		FROM tracks t
@@ -230,7 +230,7 @@ func (db *DB) GetTrackByID(ctx context.Context, trackID int64) (*TrackWithFeatur
 	err := db.pool.QueryRow(ctx, query, trackID).Scan(
 		&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 		&track.DownloadedAt, &track.AnalyzedAt,
-		&features.BPM, &features.Key, &features.DurationSeconds,
+		&features.BPM, &features.Key, &features.Mode, &features.DurationSeconds,
 		&features.LoudnessDB, &features.Energy, &features.Danceability, &features.Speechiness,
 		&features.Acousticness, &features.Instrumentalness, &features.Liveness,
 		&features.Valence, &features.Melodicness,
@@ -253,7 +253,7 @@ func (db *DB) SearchTracks(ctx context.Context, query string, limit int) ([]Trac
 	searchQuery := `
 		SELECT t.id, t.file_path, t.file_name, t.analysis_status, t.analysis_error,
 		       t.downloaded_at, t.analyzed_at,
-		       af.bpm, af.key, af.duration_seconds, af.loudness_db,
+		       af.bpm, af.key, af.mode, af.duration_seconds, af.loudness_db,
 		       af.energy, af.danceability, af.speechiness, af.acousticness,
 		       af.instrumentalness, af.liveness, af.valence, af.melodicness
 		FROM tracks t
@@ -278,7 +278,7 @@ func (db *DB) SearchTracks(ctx context.Context, query string, limit int) ([]Trac
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
 			&track.DownloadedAt, &track.AnalyzedAt,
-			&features.BPM, &features.Key, &features.DurationSeconds,
+			&features.BPM, &features.Key, &features.Mode, &features.DurationSeconds,
 			&features.LoudnessDB, &features.Energy, &features.Danceability, &features.Speechiness,
 			&features.Acousticness, &features.Instrumentalness, &features.Liveness,
 			&features.Valence, &features.Melodicness,

@@ -96,17 +96,29 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
         features["bpm"] = None
         features["bpm_error"] = str(e)
     
-    # Key detection (Chroma-based)
+    # Key and mode detection (Chroma-based, Krumhansl-Kessler profiles)
     try:
-        log("Detecting key...")
+        log("Detecting key and mode...")
         chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-        key_index = np.argmax(np.sum(chroma, axis=1))
+        chroma_mean = np.mean(chroma, axis=1)
+        key_index = int(np.argmax(chroma_mean))
         keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         features["key"] = keys[key_index]
-        log(f"Key: {features['key']}")
+
+        # Krumhansl-Kessler tonal hierarchy profiles
+        major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+        minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+        rotated_major = np.roll(major_profile, -key_index)
+        rotated_minor = np.roll(minor_profile, -key_index)
+        major_corr = float(np.corrcoef(chroma_mean, rotated_major)[0, 1])
+        minor_corr = float(np.corrcoef(chroma_mean, rotated_minor)[0, 1])
+        features["mode"] = "major" if major_corr > minor_corr else "minor"
+        features["mode_confidence"] = float(abs(major_corr - minor_corr))
+        log(f"Key: {features['key']} {features['mode']} (confidence {features['mode_confidence']:.3f})")
     except Exception as e:
-        log(f"Key detection failed: {e}")
+        log(f"Key/mode detection failed: {e}")
         features["key"] = None
+        features["mode"] = None
         features["key_error"] = str(e)
     
     # Spectral features
@@ -139,7 +151,9 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
         rms = librosa.feature.rms(y=y)[0]
         features["rms_energy_mean"] = float(np.mean(rms))
         features["rms_energy_std"] = float(np.std(rms))
-        log("RMS energy calculated")
+        # Loudness in dBFS (full scale) from RMS mean
+        features["loudness_db"] = float(20 * np.log10(max(1e-8, features["rms_energy_mean"])))
+        log(f"RMS energy calculated (loudness: {features['loudness_db']:.1f} dBFS)")
     except Exception as e:
         log(f"RMS energy failed: {e}")
         features["rms_error"] = str(e)
