@@ -4,6 +4,7 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 
 ## Remaining Steps (Immediate)
 
+- [ ] **Deploy v0.6.0 to production** — Watchtower will pull the new image; then apply migration 003 manually: `docker exec -it doyou-analytics-db psql -U doyou -d doyou_music -f /migrations/003_add_raw_features.up.sql`; then reset all `analysis_version = '1.0.0'` tracks to `pending` so they get re-analyzed with MFCCs + mode + accurate loudness_db
 - [ ] **Fix/validate high-level feature formulas** — audit `scripts/analyze_audio.py`; valence/danceability/acousticness etc. are rough approximations; tune against tracks with known Spotify values; constants like `bpm−125` pivot are arbitrary
 - [ ] **Add emotion layer** — new `track_emotions` table with 8 dimensions: `tension`, `melancholy`, `euphoria`, `aggression`, `serenity`, `nostalgia`, `sensuality`, `power` (each 0–1); computed deterministically from audio features via a mapping matrix; expose `GET /api/v1/tracks/:id/emotions`
 - [ ] **Compute similarity graph** — `track_similarity` table `(track_a_id, track_b_id, score FLOAT)`; background Go job computes cosine similarity in emotion+feature space using k-nearest-neighbours (k=20); expose `GET /api/v1/tracks/:id/similar?n=10`
@@ -20,19 +21,61 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 
 ## Next Up (Ordered)
 
+0. [ ] **Deploy v0.6.0 + re-queue existing tracks**
+	- Watchtower will auto-pull the new image once pushed (check `docker ps` to confirm `doyou-analytics-worker` is on v0.6.0)
+	- Apply migration 003 on Mac Mini:
+	  ```
+	  docker exec doyou-analytics-db psql -U doyou -d doyou_music \
+	    -c "$(cat migrations/003_add_raw_features.up.sql)"
+	  ```
+	  (or copy the SQL file into the container first)
+	- Re-queue old tracks for re-analysis:
+	  ```sql
+	  UPDATE tracks
+	  SET analysis_status = 'pending', analyzed_at = NULL
+	  WHERE id IN (
+	      SELECT track_id FROM audio_features WHERE analysis_version = '1.0.0'
+	  );
+	  ```
+	- Worker will automatically pick them up and write MFCCs, mode, loudness_db on next pass
 1. [ ] **Fix and validate high-level feature formulas**
 	- Audit `scripts/analyze_audio.py`; tune constants for energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness against tracks with known Spotify values
-	- Add unit tests for output ranges and edge cases
+	- Specific issues to address:
+	  - `danceability`: `1 - abs(bpm-125)/125` bottoms out at 0 for BPM ≥ 250; has no rhythm regularity component
+	  - `valence`: purely brightness-based, ignores mode (major vs minor is the strongest valence signal)
+	  - `acousticness`: inverse rolloff is a poor proxy; add harmonic-to-noise ratio or spectral flatness
+	  - `instrumentalness`: ZCR alone is noisy; add MFCC variance (speech has high MFCC-1 std)
+	  - After mode is now available: `valence += 0.3 if mode == 'major' else -0.3`
+	- Add unit tests for output ranges [0,1] and edge cases (silence, pure tone, white noise)
 2. [ ] **Emotion layer (new `track_emotions` table)**
-	- Dimensions: `tension`, `melancholy`, `euphoria`, `aggression`, `serenity`, `nostalgia`, `sensuality`, `power` (each 0–1)
-	- Deterministic mapping matrix: e.g. `euphoria = 0.4*valence + 0.3*energy + 0.2*danceability + 0.1*(1-speechiness)`
-	- Migration + Go struct + worker step after audio features saved
-	- API: `GET /api/v1/tracks/:id/emotions` + `GET /api/v1/emotions/distribution`
+	- Migration 004: `track_emotions (track_id PK FK, tension, melancholy, euphoria, aggression, serenity, nostalgia, sensuality, power DECIMAL(5,4), computed_at TIMESTAMP)`
+	- Go struct `TrackEmotions` in `internal/db/emotions.go`
+	- Worker step: after `SaveAudioFeatures` succeeds, call `ComputeAndSaveEmotions(ctx, trackID, features)` in same goroutine
+	- Mapping matrix (starting point — tune after formula validation):
+	  ```
+	  tension    = 0.4*energy    + 0.3*(1-valence) + 0.2*bpm_norm  + 0.1*speechiness
+	  melancholy = 0.5*(1-valence) + 0.3*(1-energy) + 0.2*(1-mode_is_major)
+	  euphoria   = 0.4*valence   + 0.3*energy       + 0.2*danceability + 0.1*(1-speechiness)
+	  aggression = 0.4*energy    + 0.3*(1-acousticness) + 0.2*bpm_norm + 0.1*(1-valence)
+	  serenity   = 0.4*acousticness + 0.3*(1-energy) + 0.2*valence   + 0.1*(1-tension)
+	  nostalgia  = 0.3*acousticness + 0.3*melodicness + 0.2*(1-valence) + 0.2*(1-danceability)
+	  sensuality = 0.4*valence   + 0.3*(1-bpm_norm) + 0.2*melodicness + 0.1*liveness
+	  power      = 0.5*energy    + 0.3*(1-acousticness) + 0.2*bpm_norm
+	  ```
+	  where `bpm_norm = min(1, bpm/200)` and `mode_is_major = 1 if mode == 'major' else 0`
+	- API endpoints:
+	  - `GET /api/v1/tracks/:id/emotions` → `TrackEmotions` JSON
+	  - `GET /api/v1/emotions/distribution` → min/max/avg per dimension across all tracks
 	- Future: manual user tagging/correction from UI
 3. [ ] **Similarity graph computation**
-	- `track_similarity` table: `(track_a_id INT, track_b_id INT, score FLOAT, computed_at TIMESTAMP)`
-	- Background Go job: top-20 KNN per track by cosine similarity in 8-emotion space (~200K edges for 10K tracks)
-	- `POST /api/v1/similarity/recompute` + `GET /api/v1/tracks/:id/similar?n=10`
+	- Migration 005: `track_similarity (track_a_id INT, track_b_id INT, score DECIMAL(6,5), computed_at TIMESTAMP, PRIMARY KEY (track_a_id, track_b_id))`
+	- Background Go job in worker (new goroutine, triggered after each analysis batch or via `POST /api/v1/similarity/recompute`):
+	  1. Load all `track_emotions` rows into memory as float64 vectors
+	  2. For each track, compute cosine similarity against all others (vectorized with BLAS or manual dot product)
+	  3. Keep top-20 neighbours per track; upsert into `track_similarity`
+	  4. For 10K tracks: ~50M comparisons, feasible in a few minutes in Go; shard by batch if needed
+	- API: `GET /api/v1/tracks/:id/similar?n=10` → `[]TrackSimilarity{TrackID, Score, Track}`
+	- Index: `CREATE INDEX ON track_similarity (track_a_id, score DESC)` for fast top-N lookup
 4. [ ] **Unit test coverage to 80%+**
 	- `internal/analyzer`: failure-mode tests (python errors, invalid JSON, timeout paths)
 	- `internal/api`: pagination/filter/error response tests
