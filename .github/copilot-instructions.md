@@ -3,12 +3,24 @@
 ## Project Overview
 This is an audio analysis and metadata extraction service for DoYou World Radio. It analyzes MP3 tracks from local storage, extracts 13 audio features using Python/librosa, stores results in PostgreSQL, and provides a REST API for querying analyzed tracks.
 
-**Current Status (Feb 2026):**
-- 3,752 tracks imported from `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks/`
-- 135 successfully analyzed (~4%)
-- ~1,100 failed (corrupted MP3 files - normal, worker skips them)
-- ~2,500 pending analysis
-- Worker processes 6 tracks in parallel
+**Current Status (Mar 2026):**
+- Running on Mac Mini alongside the scraper stack
+- Tracks in DB vary — worker auto-imports from NAS on each scan, cleans up deleted files every 10 minutes
+- Worker processes 6 tracks in parallel with librosa/Python
+- Analytics API is proxied via the scraper frontend nginx at `/analytics-api/` (not exposed directly)
+
+## 📚 Always Read These Docs First
+
+Before making changes, read the relevant docs in `docs/`:
+
+- **`docs/TODO.md`** — current priorities and roadmap
+- **`docs/DUAL_REPO_DEVELOPMENT.md`** — how this repo and `doyou-world-scraper` work together locally and in production
+- **`docs/PREPUSH_CHECKLIST.md`** — required checks before every push
+- **`docs/DEPLOYMENT.md`** — production setup, watchtower, docker commands
+- **`docs/TESTING.md`** — test patterns and coverage targets
+- **`docs/API_USAGE.md`** — full API reference
+- **`docs/DATABASE_USAGE.md`** — schema, queries, integration patterns
+- **`docs/SCRAPER_INTEGRATION.md`** — how the scraper consumes the analytics API
 
 ## Tech Stack
 - **Backend**: Go 1.25+ with standard library net/http + gorilla/mux router
@@ -106,9 +118,8 @@ doyou-music-analytics/
 ### 4. Automatic Cleanup
 - Detects files deleted from NAS
 - Two modes: "mark" (set status='missing') or "delete" (remove from DB)
-- Configurable interval (default: 24h)
-- Enabled by default with "mark" action (safe, preserves history)
-- Keeps statistics accurate
+- Configurable interval via `CLEANUP_INTERVAL` (default: 10m — production uses `delete` action)
+- Keeps statistics accurate; tracks removed from NAS disappear from DB within 10 minutes
 
 ### 5. REST API
 - Query analyzed tracks with audio features
@@ -462,8 +473,12 @@ func (a *Analyzer) AnalyzeTrack(filePath string) (*AudioFeatures, error) {
 ```
 
 ## Important Notes
-- **NAS Path**: `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks` (9,875 MP3 files)
-- **Docker NAS Mount**: `/mnt/music/downloads` (read-only in production)
+- **NAS Path (machine-specific)**: Set `NAS_MUSIC_PATH` in `.env` to the host path on each machine — this is gitignored and differs per machine:
+  - Mac Mini (production): `NAS_MUSIC_PATH=/Volumes/Expansion/ExtHDD-8TB/Music`
+  - Local dev machine: `NAS_MUSIC_PATH=/wherever/your/nas/is/mounted`
+- **Container NAS Path**: Always `/mnt/music/downloads` inside the container — `docker-compose.prod.yml` mounts `NAS_MUSIC_PATH` → `/mnt/music/downloads`
+- **Without Docker (local Go binary)**: Set `NAS_MOUNT_PATH` directly to the music path, set `VALIDATE_NAS_ON_STARTUP=false`
+- **Analytics proxy**: In production the analytics API is NOT exposed directly — nginx in the scraper frontend proxies `/analytics-api/` → `doyou-analytics-api:8080`. Both stacks share `doyou-network`.
 - **Analysis Time**: ~2 seconds per track with parallel processing
 - **Parallel Workers**: 4 workers process tracks simultaneously
 - **Race Condition Prevention**: Uses `ClaimPendingTrack()` with `FOR UPDATE SKIP LOCKED`
