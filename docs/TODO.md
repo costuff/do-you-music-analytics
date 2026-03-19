@@ -12,6 +12,10 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 - [ ] Add safe bulk re-analysis flow for failed/outdated tracks (dry-run + progress)
 - [ ] Improve worker observability (throughput/error metrics) and retry/backoff behavior
 - [ ] Keep integration contracts stable for scraper dashboard consumption (`/stats`, `/stats/detailed`, `/tracks`)
+- [ ] **Authentication (personal use → multi-user)**
+  - Short term: token-based auth on the analytics API (currently unauthenticated behind nginx proxy)
+  - Long term: per-user libraries — each user has their own track collection, analysis results, and dashboard
+  - Design note: keep single-user mode as default; multi-user is an opt-in layer on top
 
 ## Next Up (Ordered)
 
