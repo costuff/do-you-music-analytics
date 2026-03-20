@@ -13,6 +13,7 @@ import (
 	"github.com/costuff/doyou-music-analytics/internal/api"
 	"github.com/costuff/doyou-music-analytics/internal/config"
 	"github.com/costuff/doyou-music-analytics/internal/db"
+	"github.com/costuff/doyou-music-analytics/migrations"
 	"github.com/costuff/doyou-music-analytics/pkg/logger"
 )
 
@@ -40,6 +41,12 @@ func main() {
 		log.Fatal(fmt.Sprintf("Failed to ping database: %v", err))
 	}
 	log.Info("Database connection established")
+
+	// Auto-apply pending migrations (idempotent — safe to run on every startup)
+	if err := database.RunMigrations(ctx, migrations.FS); err != nil {
+		log.Fatal(fmt.Sprintf("Failed to run migrations: %v", err))
+	}
+	log.Info("Migrations up to date")
 
 	// Create handlers
 	handlers := api.NewHandlers(database, log, version)
