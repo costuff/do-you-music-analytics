@@ -726,3 +726,143 @@ func TestGetEmotionsDistributionHandler_DBError(t *testing.T) {
 		t.Errorf("expected 500, got %d", w.Code)
 	}
 }
+
+// ── GetAllEmotionsHandler ──────────────────────────────────────────────────────
+
+func TestGetAllEmotionsHandler_Success(t *testing.T) {
+	now := time.Now()
+	store := &mockTrackStore{
+		getAllEmotionsFunc: func(_ context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+			return []db.TrackEmotions{
+				{TrackID: 1, Tension: 0.44, Melancholy: 0.50, Euphoria: 0.54, Aggression: 0.50,
+					Serenity: 0.46, Nostalgia: 0.39, Sensuality: 0.39, Power: 0.47, ComputedAt: now},
+				{TrackID: 2, Tension: 0.40, Melancholy: 0.39, Euphoria: 0.64, Aggression: 0.55,
+					Serenity: 0.38, Nostalgia: 0.28, Sensuality: 0.50, Power: 0.55, ComputedAt: now},
+			}, 2, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetAllEmotionsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp["total"].(float64) != 2 {
+		t.Errorf("total = %v, want 2", resp["total"])
+	}
+	emotions, ok := resp["emotions"].([]interface{})
+	if !ok {
+		t.Fatal("emotions field missing or wrong type")
+	}
+	if len(emotions) != 2 {
+		t.Errorf("len(emotions) = %d, want 2", len(emotions))
+	}
+	// Verify response envelope fields
+	for _, field := range []string{"emotions", "total", "limit", "offset"} {
+		if _, ok := resp[field]; !ok {
+			t.Errorf("response missing field: %s", field)
+		}
+	}
+}
+
+func TestGetAllEmotionsHandler_Empty(t *testing.T) {
+	store := &mockTrackStore{
+		getAllEmotionsFunc: func(_ context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+			return []db.TrackEmotions{}, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetAllEmotionsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp["total"].(float64) != 0 {
+		t.Errorf("total = %v, want 0", resp["total"])
+	}
+	// emotions should be [] not null
+	emotions, ok := resp["emotions"].([]interface{})
+	if !ok {
+		t.Fatal("emotions should be an array even when empty")
+	}
+	if len(emotions) != 0 {
+		t.Errorf("expected empty array, got %d elements", len(emotions))
+	}
+}
+
+func TestGetAllEmotionsHandler_PaginationDefaults(t *testing.T) {
+	var capturedLimit, capturedOffset int
+	store := &mockTrackStore{
+		getAllEmotionsFunc: func(_ context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+			capturedLimit = limit
+			capturedOffset = offset
+			return []db.TrackEmotions{}, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetAllEmotionsHandler(w, req)
+
+	if capturedLimit != 2000 {
+		t.Errorf("default limit = %d, want 2000", capturedLimit)
+	}
+	if capturedOffset != 0 {
+		t.Errorf("default offset = %d, want 0", capturedOffset)
+	}
+}
+
+func TestGetAllEmotionsHandler_PaginationParams(t *testing.T) {
+	var capturedLimit, capturedOffset int
+	store := &mockTrackStore{
+		getAllEmotionsFunc: func(_ context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+			capturedLimit = limit
+			capturedOffset = offset
+			return []db.TrackEmotions{}, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions?limit=50&offset=100", nil)
+	w := httptest.NewRecorder()
+	h.GetAllEmotionsHandler(w, req)
+
+	if capturedLimit != 50 {
+		t.Errorf("limit = %d, want 50", capturedLimit)
+	}
+	if capturedOffset != 100 {
+		t.Errorf("offset = %d, want 100", capturedOffset)
+	}
+}
+
+func TestGetAllEmotionsHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getAllEmotionsFunc: func(_ context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+			return nil, 0, errors.New("db unavailable")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions", nil)
+	w := httptest.NewRecorder()
+	h.GetAllEmotionsHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
