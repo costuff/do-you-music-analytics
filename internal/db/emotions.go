@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -136,29 +137,35 @@ func (db *DB) GetEmotions(ctx context.Context, trackID int64) (*TrackEmotions, e
 		if err.Error() == "no rows in result set" {
 			return nil, nil
 		}
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("get emotions for track %d: %w", trackID, err)
 	}
 	return &e, nil
 }
 
 // GetEmotionsDistribution returns min/max/avg/count for every emotion dimension.
+// Returns an empty slice when the table has no rows yet.
 func (db *DB) GetEmotionsDistribution(ctx context.Context) ([]EmotionDistribution, error) {
+	// Use COALESCE so that MIN/MAX/AVG return 0 instead of NULL on an empty table,
+	// allowing clean scanning into float64 without nullable wrapper types.
 	query := `
-		SELECT 'tension'    AS dim, MIN(tension),    MAX(tension),    AVG(tension),    COUNT(*) FROM track_emotions
+		SELECT 'tension'    AS dim, COALESCE(MIN(tension),0),    COALESCE(MAX(tension),0),    COALESCE(AVG(tension),0),    COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'melancholy',        MIN(melancholy), MAX(melancholy), AVG(melancholy), COUNT(*) FROM track_emotions
+		SELECT 'melancholy',        COALESCE(MIN(melancholy),0), COALESCE(MAX(melancholy),0), COALESCE(AVG(melancholy),0), COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'euphoria',          MIN(euphoria),   MAX(euphoria),   AVG(euphoria),   COUNT(*) FROM track_emotions
+		SELECT 'euphoria',          COALESCE(MIN(euphoria),0),   COALESCE(MAX(euphoria),0),   COALESCE(AVG(euphoria),0),   COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'aggression',        MIN(aggression), MAX(aggression), AVG(aggression), COUNT(*) FROM track_emotions
+		SELECT 'aggression',        COALESCE(MIN(aggression),0), COALESCE(MAX(aggression),0), COALESCE(AVG(aggression),0), COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'serenity',          MIN(serenity),   MAX(serenity),   AVG(serenity),   COUNT(*) FROM track_emotions
+		SELECT 'serenity',          COALESCE(MIN(serenity),0),   COALESCE(MAX(serenity),0),   COALESCE(AVG(serenity),0),   COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'nostalgia',         MIN(nostalgia),  MAX(nostalgia),  AVG(nostalgia),  COUNT(*) FROM track_emotions
+		SELECT 'nostalgia',         COALESCE(MIN(nostalgia),0),  COALESCE(MAX(nostalgia),0),  COALESCE(AVG(nostalgia),0),  COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'sensuality',        MIN(sensuality), MAX(sensuality), AVG(sensuality), COUNT(*) FROM track_emotions
+		SELECT 'sensuality',        COALESCE(MIN(sensuality),0), COALESCE(MAX(sensuality),0), COALESCE(AVG(sensuality),0), COUNT(*) FROM track_emotions
 		UNION ALL
-		SELECT 'power',             MIN(power),      MAX(power),      AVG(power),      COUNT(*) FROM track_emotions
+		SELECT 'power',             COALESCE(MIN(power),0),      COALESCE(MAX(power),0),      COALESCE(AVG(power),0),      COUNT(*) FROM track_emotions
 	`
 	rows, err := db.pool.Query(ctx, query)
 	if err != nil {
