@@ -22,6 +22,7 @@ type TrackStore interface {
 	GetRecentCompletedTracks(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
 	GetEmotions(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
 	GetEmotionsDistribution(ctx context.Context) ([]db.EmotionDistribution, error)
+	GetAllEmotions(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
 }
 
 type Handlers struct {
@@ -175,6 +176,37 @@ func (h *Handlers) GetEmotionsDistributionHandler(w http.ResponseWriter, r *http
 		return
 	}
 	JSON(w, http.StatusOK, map[string]interface{}{"distribution": dist, "count": len(dist)})
+}
+
+// GetAllEmotionsHandler handles GET /api/v1/emotions — bulk fetch for the emotion graph.
+func (h *Handlers) GetAllEmotionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 2000
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+	emotions, total, err := h.db.GetAllEmotions(r.Context(), limit, offset)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("Failed to get all emotions: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to retrieve emotions")
+		return
+	}
+	if emotions == nil {
+		emotions = []db.TrackEmotions{}
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"emotions": emotions,
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+	})
 }
 
 func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) {

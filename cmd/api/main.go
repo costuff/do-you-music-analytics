@@ -57,6 +57,7 @@ func main() {
 	mux.HandleFunc("/api/v1/tracks/", routeTrackByID(handlers))
 	mux.HandleFunc("/api/v1/tracks/search", handlers.SearchTracksHandler)
 	mux.HandleFunc("/api/v1/tracks/failed", handlers.FailedTracksHandler)
+	mux.HandleFunc("/api/v1/emotions", handlers.GetAllEmotionsHandler)
 	mux.HandleFunc("/api/v1/emotions/distribution", handlers.GetEmotionsDistributionHandler)
 
 	// Apply middleware

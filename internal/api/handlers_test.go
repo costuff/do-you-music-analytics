@@ -15,14 +15,15 @@ import (
 
 // mockTrackStore implements TrackStore for testing.
 type mockTrackStore struct {
-	getTrackStatsFunc                func(ctx context.Context) (map[string]int64, error)
-	listTracksFunc                   func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
-	getTrackByIDFunc                 func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
-	searchTracksFunc                 func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
-	getFailedTracksFunc              func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
-	getRecentCompletedTracksFunc     func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
-	getEmotionsFunc                  func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
-	getEmotionsDistributionFunc      func(ctx context.Context) ([]db.EmotionDistribution, error)
+	getTrackStatsFunc            func(ctx context.Context) (map[string]int64, error)
+	listTracksFunc               func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
+	getTrackByIDFunc             func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
+	searchTracksFunc             func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
+	getFailedTracksFunc          func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getRecentCompletedTracksFunc func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getEmotionsFunc              func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
+	getEmotionsDistributionFunc  func(ctx context.Context) ([]db.EmotionDistribution, error)
+	getAllEmotionsFunc           func(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -54,6 +55,12 @@ func (m *mockTrackStore) GetEmotionsDistribution(ctx context.Context) ([]db.Emot
 		return m.getEmotionsDistributionFunc(ctx)
 	}
 	return nil, nil
+}
+func (m *mockTrackStore) GetAllEmotions(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error) {
+	if m.getAllEmotionsFunc != nil {
+		return m.getAllEmotionsFunc(ctx, limit, offset)
+	}
+	return []db.TrackEmotions{}, 0, nil
 }
 
 func newTestHandlers(store TrackStore) *Handlers {

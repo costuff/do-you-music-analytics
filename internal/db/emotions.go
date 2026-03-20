@@ -49,13 +49,13 @@ func ComputeEmotions(f *AudioFeatures) TrackEmotions {
 		return math.Max(0, math.Min(1, v))
 	}
 
-	energy          := pf(f.Energy, 0.5)
-	valence         := pf(f.Valence, 0.5)
-	danceability    := pf(f.Danceability, 0.5)
-	acousticness    := pf(f.Acousticness, 0.5)
-	speechiness     := pf(f.Speechiness, 0.3)
-	liveness        := pf(f.Liveness, 0.3)
-	melodicness     := pf(f.Melodicness, 0.5)
+	energy := pf(f.Energy, 0.5)
+	valence := pf(f.Valence, 0.5)
+	danceability := pf(f.Danceability, 0.5)
+	acousticness := pf(f.Acousticness, 0.5)
+	speechiness := pf(f.Speechiness, 0.3)
+	liveness := pf(f.Liveness, 0.3)
+	melodicness := pf(f.Melodicness, 0.5)
 
 	bpmNorm := 0.5
 	if f.BPM != nil {
@@ -68,15 +68,15 @@ func ComputeEmotions(f *AudioFeatures) TrackEmotions {
 	}
 
 	// Mapping matrix (defined in docs/TODO.md)
-	tension    := clamp(0.4*energy + 0.3*(1-valence) + 0.2*bpmNorm + 0.1*speechiness)
+	tension := clamp(0.4*energy + 0.3*(1-valence) + 0.2*bpmNorm + 0.1*speechiness)
 	melancholy := clamp(0.5*(1-valence) + 0.3*(1-energy) + 0.2*(1-modeIsMajor))
-	euphoria   := clamp(0.4*valence + 0.3*energy + 0.2*danceability + 0.1*(1-speechiness))
+	euphoria := clamp(0.4*valence + 0.3*energy + 0.2*danceability + 0.1*(1-speechiness))
 	aggression := clamp(0.4*energy + 0.3*(1-acousticness) + 0.2*bpmNorm + 0.1*(1-valence))
 	// serenity uses tension that was just computed — no circular dependency
-	serenity   := clamp(0.4*acousticness + 0.3*(1-energy) + 0.2*valence + 0.1*(1-tension))
-	nostalgia  := clamp(0.3*acousticness + 0.3*melodicness + 0.2*(1-valence) + 0.2*(1-danceability))
+	serenity := clamp(0.4*acousticness + 0.3*(1-energy) + 0.2*valence + 0.1*(1-tension))
+	nostalgia := clamp(0.3*acousticness + 0.3*melodicness + 0.2*(1-valence) + 0.2*(1-danceability))
 	sensuality := clamp(0.4*valence + 0.3*(1-bpmNorm) + 0.2*melodicness + 0.1*liveness)
-	power      := clamp(0.5*energy + 0.3*(1-acousticness) + 0.2*bpmNorm)
+	power := clamp(0.5*energy + 0.3*(1-acousticness) + 0.2*bpmNorm)
 
 	return TrackEmotions{
 		TrackID:    f.TrackID,
@@ -182,4 +182,41 @@ func (db *DB) GetEmotionsDistribution(ctx context.Context) ([]EmotionDistributio
 		dist = append(dist, d)
 	}
 	return dist, rows.Err()
+}
+
+// GetAllEmotions returns every computed track emotion record (paginated).
+// This is used by the frontend emotion graph to position all songs in emotion space.
+func (db *DB) GetAllEmotions(ctx context.Context, limit, offset int) ([]TrackEmotions, int64, error) {
+	var total int64
+	if err := db.pool.QueryRow(ctx, "SELECT COUNT(*) FROM track_emotions").Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count all emotions: %w", err)
+	}
+	if total == 0 {
+		return []TrackEmotions{}, 0, nil
+	}
+
+	rows, err := db.pool.Query(ctx, `
+		SELECT track_id, tension, melancholy, euphoria, aggression,
+		       serenity, nostalgia, sensuality, power, computed_at
+		FROM track_emotions
+		ORDER BY track_id
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query all emotions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []TrackEmotions
+	for rows.Next() {
+		var e TrackEmotions
+		if err := rows.Scan(
+			&e.TrackID, &e.Tension, &e.Melancholy, &e.Euphoria, &e.Aggression,
+			&e.Serenity, &e.Nostalgia, &e.Sensuality, &e.Power, &e.ComputedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan emotions row: %w", err)
+		}
+		result = append(result, e)
+	}
+	return result, total, rows.Err()
 }
