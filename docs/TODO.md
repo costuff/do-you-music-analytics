@@ -111,6 +111,10 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 - [ ] Enforce linting with current `golangci-lint` configuration in CI
 - [ ] Add short operator runbook for cleanup and scan cadence tuning
 
+## Scraper Frontend
+
+- [ ] **Show analytics versions in footer** — the scraper frontend `Footer.tsx` currently shows backend + frontend versions from the scraper's own `/api/v1/version`. Extend it to also fetch `GET /analytics-api/api/v1/version` (proxied through nginx) and display the analytics API version alongside. Requires the analytics `/api/v1/version` endpoint to exist and return a `version` field (it does via the `VERSION` file baked into the image at build time).
+
 ## Completed Recently
 
 - [x] **Persisted raw audio features (v0.6.0, 2026-03-19)** — MFCCs (0–12 mean+std), spectral centroid/rolloff, ZCR, RMS energy were computed by librosa but silently discarded; migration 003 adds columns, `analyze_audio.py` now outputs them, `features.go` saves all 32 new fields
