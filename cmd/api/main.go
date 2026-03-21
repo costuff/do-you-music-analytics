@@ -66,6 +66,8 @@ func main() {
 	mux.HandleFunc("/api/v1/tracks/failed", handlers.FailedTracksHandler)
 	mux.HandleFunc("/api/v1/emotions", handlers.GetAllEmotionsHandler)
 	mux.HandleFunc("/api/v1/emotions/distribution", handlers.GetEmotionsDistributionHandler)
+	mux.HandleFunc("/api/v1/similarity/recompute", handlers.RecomputeSimilarityHandler)
+	mux.HandleFunc("/api/v1/similarity/stats", handlers.GetSimilarityStatsHandler)
 
 	// Apply middleware
 	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
@@ -110,6 +112,7 @@ func main() {
 //
 //	/api/v1/tracks/:id          → GetTrackHandler
 //	/api/v1/tracks/:id/emotions → GetTrackEmotionsHandler
+//	/api/v1/tracks/:id/similar  → GetSimilarTracksHandler
 func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is /api/v1/tracks/:id or /api/v1/tracks/search or /api/v1/tracks/failed
@@ -127,14 +130,20 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 			return
 		}
 
-		// Sub-resource: /api/v1/tracks/:id/emotions
+		// Sub-resources: /api/v1/tracks/:id/<sub>
 		parts := strings.SplitN(path, "/", 2)
-		if len(parts) == 2 && parts[1] == "emotions" {
-			handlers.GetTrackEmotionsHandler(w, r)
-			return
+		if len(parts) == 2 {
+			switch parts[1] {
+			case "emotions":
+				handlers.GetTrackEmotionsHandler(w, r)
+				return
+			case "similar":
+				handlers.GetSimilarTracksHandler(w, r)
+				return
+			}
 		}
 
-		// Otherwise it's a track ID
+		// Otherwise it's a bare track ID
 		handlers.GetTrackHandler(w, r)
 	}
 }

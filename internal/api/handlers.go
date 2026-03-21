@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/costuff/doyou-music-analytics/internal/db"
@@ -23,9 +24,13 @@ type TrackStore interface {
 	GetEmotions(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
 	GetEmotionsDistribution(ctx context.Context) ([]db.EmotionDistribution, error)
 	GetAllEmotions(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
+	GetSimilarTracks(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error)
+	GetSimilarityStats(ctx context.Context) (db.SimilarityStats, error)
+	ComputeSimilarity(ctx context.Context, k int) (int, error)
 }
 
 type Handlers struct {
+	recomputeInProgress atomic.Bool
 	db      TrackStore
 	log     *logger.Logger
 	version string
@@ -257,4 +262,81 @@ func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) 
 		response["completion_percentage"] = fmt.Sprintf("%.2f", completionPct)
 	}
 	JSON(w, http.StatusOK, response)
+}
+// GetSimilarTracksHandler handles GET /api/v1/tracks/:id/similar?n=10
+// Returns the pre-computed top-n nearest neighbours for the given track.
+func (h *Handlers) GetSimilarTracksHandler(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/")
+	idStr = strings.TrimSuffix(idStr, "/similar")
+	trackID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || trackID <= 0 {
+		h.log.Errorf("GetSimilarTracks: invalid track id %q", r.URL.Path)
+		http.Error(w, "invalid track id", http.StatusBadRequest)
+		return
+	}
+
+	n := 10
+	if q := r.URL.Query().Get("n"); q != "" {
+		if parsed, err := strconv.Atoi(q); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+
+	results, err := h.db.GetSimilarTracks(r.Context(), trackID, n)
+	if err != nil {
+		h.log.Errorf("GetSimilarTracks: db error for track %d: %v", trackID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if results == nil {
+		results = []db.TrackSimilarityResult{}
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"track_id": trackID,
+		"similar":  results,
+		"count":    len(results),
+	})
+}
+
+// RecomputeSimilarityHandler handles POST /api/v1/similarity/recompute
+// Triggers a background similarity recomputation and returns 202 immediately.
+// Returns 409 if a recomputation is already running.
+func (h *Handlers) RecomputeSimilarityHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.recomputeInProgress.CompareAndSwap(false, true) {
+		JSON(w, http.StatusConflict, map[string]string{"status": "already_running"})
+		return
+	}
+	go func() {
+		defer h.recomputeInProgress.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		n, err := h.db.ComputeSimilarity(ctx, 20)
+		if err != nil {
+			h.log.Errorf("RecomputeSimilarity: failed: %v", err)
+			return
+		}
+		h.log.Infof("RecomputeSimilarity: done, %d pairs stored", n)
+	}()
+	JSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+// GetSimilarityStatsHandler handles GET /api/v1/similarity/stats
+func (h *Handlers) GetSimilarityStatsHandler(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.db.GetSimilarityStats(r.Context())
+	if err != nil {
+		h.log.Errorf("GetSimilarityStats: db error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	stats2 := map[string]interface{}{
+		"total_pairs":     stats.TotalPairs,
+		"covered_tracks":  stats.CoveredTracks,
+		"last_computed":   stats.LastComputed,
+		"recomputing":     h.recomputeInProgress.Load(),
+	}
+	JSON(w, http.StatusOK, stats2)
 }

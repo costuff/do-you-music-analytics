@@ -192,6 +192,44 @@ func main() {
 		}
 	}()
 
+	// Start periodic similarity computation in background (every 30 minutes).
+	// Only runs when there are emotion records to work with; non-fatal on error.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		similarityTicker := time.NewTicker(30 * time.Minute)
+		defer similarityTicker.Stop()
+
+		// Wait 10 minutes after startup before first run to let the main workers
+		// build up a batch of emotion records first.
+		time.Sleep(10 * time.Minute)
+
+		runSimilarity := func() {
+			n, err := database.ComputeSimilarity(shutdownCtx, 20)
+			if err != nil {
+				log.Error(fmt.Sprintf("Similarity computation failed: %v", err))
+				return
+			}
+			if n > 0 {
+				log.Info(fmt.Sprintf("🔗 Similarity graph updated: %d pairs stored", n))
+			}
+		}
+
+		log.Info("🔗 Running initial similarity computation...")
+		runSimilarity()
+
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				log.Info("Similarity goroutine shutting down")
+				return
+			case <-similarityTicker.C:
+				log.Info("🔗 Updating similarity graph...")
+				runSimilarity()
+			}
+		}
+	}()
+
 	workerFunc := func(workerID int) {
 		defer wg.Done()
 

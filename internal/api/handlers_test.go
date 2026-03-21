@@ -24,6 +24,9 @@ type mockTrackStore struct {
 	getEmotionsFunc              func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
 	getEmotionsDistributionFunc  func(ctx context.Context) ([]db.EmotionDistribution, error)
 	getAllEmotionsFunc           func(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
+	getSimilarTracksFunc         func(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error)
+	getSimilarityStatsFunc       func(ctx context.Context) (db.SimilarityStats, error)
+	computeSimilarityFunc        func(ctx context.Context, k int) (int, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -61,6 +64,27 @@ func (m *mockTrackStore) GetAllEmotions(ctx context.Context, limit, offset int) 
 		return m.getAllEmotionsFunc(ctx, limit, offset)
 	}
 	return []db.TrackEmotions{}, 0, nil
+}
+
+func (m *mockTrackStore) GetSimilarTracks(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error) {
+	if m.getSimilarTracksFunc != nil {
+		return m.getSimilarTracksFunc(ctx, trackID, n)
+	}
+	return []db.TrackSimilarityResult{}, nil
+}
+
+func (m *mockTrackStore) GetSimilarityStats(ctx context.Context) (db.SimilarityStats, error) {
+	if m.getSimilarityStatsFunc != nil {
+		return m.getSimilarityStatsFunc(ctx)
+	}
+	return db.SimilarityStats{}, nil
+}
+
+func (m *mockTrackStore) ComputeSimilarity(ctx context.Context, k int) (int, error) {
+	if m.computeSimilarityFunc != nil {
+		return m.computeSimilarityFunc(ctx, k)
+	}
+	return 0, nil
 }
 
 func newTestHandlers(store TrackStore) *Handlers {
@@ -861,6 +885,154 @@ func TestGetAllEmotionsHandler_DBError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/emotions", nil)
 	w := httptest.NewRecorder()
 	h.GetAllEmotionsHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// ---- GetSimilarTracksHandler ----
+
+func TestGetSimilarTracksHandler_Success(t *testing.T) {
+	store := &mockTrackStore{
+		getSimilarTracksFunc: func(_ context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error) {
+			return []db.TrackSimilarityResult{
+				{TrackID: 2, Score: 0.95},
+				{TrackID: 3, Score: 0.87},
+			}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/1/similar", nil)
+	req = req // path is parsed by handler from URL
+	w := httptest.NewRecorder()
+	h.GetSimilarTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	similar, ok := resp["similar"].([]interface{})
+	if !ok {
+		t.Fatal("response.similar is missing or not an array")
+	}
+	if len(similar) != 2 {
+		t.Errorf("expected 2 results, got %d", len(similar))
+	}
+}
+
+func TestGetSimilarTracksHandler_InvalidID(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/notanumber/similar", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarTracksHandler(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetSimilarTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getSimilarTracksFunc: func(_ context.Context, _ int64, _ int) ([]db.TrackSimilarityResult, error) {
+			return nil, errors.New("db gone")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/5/similar", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarTracksHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// ---- RecomputeSimilarityHandler ----
+
+func TestRecomputeSimilarityHandler_Success(t *testing.T) {
+	store := &mockTrackStore{
+		computeSimilarityFunc: func(_ context.Context, _ int) (int, error) { return 100, nil },
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/similarity/recompute", nil)
+	w := httptest.NewRecorder()
+	h.RecomputeSimilarityHandler(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected 202, got %d", w.Code)
+	}
+}
+
+func TestRecomputeSimilarityHandler_WrongMethod(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/similarity/recompute", nil)
+	w := httptest.NewRecorder()
+	h.RecomputeSimilarityHandler(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestRecomputeSimilarityHandler_AlreadyRunning(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	h.recomputeInProgress.Store(true) // simulate in-progress
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/similarity/recompute", nil)
+	w := httptest.NewRecorder()
+	h.RecomputeSimilarityHandler(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d", w.Code)
+	}
+}
+
+// ---- GetSimilarityStatsHandler ----
+
+func TestGetSimilarityStatsHandler_Success(t *testing.T) {
+	store := &mockTrackStore{
+		getSimilarityStatsFunc: func(_ context.Context) (db.SimilarityStats, error) {
+			return db.SimilarityStats{TotalPairs: 320, CoveredTracks: 16}, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/similarity/stats", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarityStatsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["total_pairs"] == nil {
+		t.Error("response missing total_pairs")
+	}
+}
+
+func TestGetSimilarityStatsHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		getSimilarityStatsFunc: func(_ context.Context) (db.SimilarityStats, error) {
+			return db.SimilarityStats{}, errors.New("db error")
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/similarity/stats", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarityStatsHandler(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
