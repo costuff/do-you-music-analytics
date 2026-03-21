@@ -36,6 +36,7 @@ services:
       # Storage
       NAS_MOUNT_PATH: /mnt/music/downloads
       VALIDATE_NAS_ON_STARTUP: ${VALIDATE_NAS_ON_STARTUP:-true}
+      SHALLOW_SCAN: "false"   # always scan all subdirectories of NAS_MOUNT_PATH recursively
       
       # Analysis Configuration
       BATCH_SIZE: ${BATCH_SIZE:-10}

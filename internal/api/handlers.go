@@ -44,9 +44,9 @@ type TrackStore interface {
 
 type Handlers struct {
 	recomputeInProgress atomic.Bool
-	db      TrackStore
-	log     *logger.Logger
-	version string
+	db                  TrackStore
+	log                 *logger.Logger
+	version             string
 }
 
 func NewHandlers(database TrackStore, log *logger.Logger, version string) *Handlers {
@@ -276,6 +276,7 @@ func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	JSON(w, http.StatusOK, response)
 }
+
 // GetSimilarTracksHandler handles GET /api/v1/tracks/:id/similar?n=10
 // Returns the pre-computed top-n nearest neighbours for the given track.
 func (h *Handlers) GetSimilarTracksHandler(w http.ResponseWriter, r *http.Request) {
@@ -346,10 +347,10 @@ func (h *Handlers) GetSimilarityStatsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	stats2 := map[string]interface{}{
-		"total_pairs":     stats.TotalPairs,
-		"covered_tracks":  stats.CoveredTracks,
-		"last_computed":   stats.LastComputed,
-		"recomputing":     h.recomputeInProgress.Load(),
+		"total_pairs":    stats.TotalPairs,
+		"covered_tracks": stats.CoveredTracks,
+		"last_computed":  stats.LastComputed,
+		"recomputing":    h.recomputeInProgress.Load(),
 	}
 	JSON(w, http.StatusOK, stats2)
 }

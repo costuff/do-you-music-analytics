@@ -229,9 +229,9 @@ func (db *DB) GetSimilarTracks(ctx context.Context, trackID int64, n int) ([]Tra
 
 // SimilarityStats holds summary information about the similarity table.
 type SimilarityStats struct {
-	TotalPairs  int64     `json:"total_pairs"`
-	CoveredTracks int64   `json:"covered_tracks"`
-	LastComputed *time.Time `json:"last_computed,omitempty"`
+	TotalPairs    int64      `json:"total_pairs"`
+	CoveredTracks int64      `json:"covered_tracks"`
+	LastComputed  *time.Time `json:"last_computed,omitempty"`
 }
 
 // GetSimilarityStats returns a summary of the current similarity table state.
