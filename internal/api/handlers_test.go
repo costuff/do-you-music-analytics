@@ -31,6 +31,14 @@ type mockTrackStore struct {
 	getSimilarityStatsFunc         func(ctx context.Context) (db.SimilarityStats, error)
 	computeSimilarityFunc          func(ctx context.Context, k int) (int, error)
 	resetTracksForReanalysisFunc   func(ctx context.Context, statusFilter string, dryRun bool) (int64, error)
+	getAllProjectionsFunc           func(ctx context.Context, limit int) ([]db.TrackProjection, error)
+	computeAllProjectionsFunc      func(ctx context.Context) (int, error)
+	getTaxonomyTreeFunc            func(ctx context.Context) ([]*db.TaxonomyNode, error)
+	addTaxonomyNodeFunc            func(ctx context.Context, parentID *int, name, description, source string) (*db.TaxonomyNode, error)
+	getTrackLabelFunc              func(ctx context.Context, trackID int64) (*db.TrackLabel, error)
+	setTrackLabelFunc              func(ctx context.Context, trackID int64, labelPath []string, curatedBy, notes string) (*db.TrackLabel, error)
+	getLabelsByPathFunc            func(ctx context.Context, path []string) ([]db.TrackLabel, error)
+	autoLabelTrackFunc             func(ctx context.Context, trackID int64) (*db.TrackLabel, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -96,6 +104,54 @@ func (m *mockTrackStore) ResetTracksForReanalysis(ctx context.Context, statusFil
 		return m.resetTracksForReanalysisFunc(ctx, statusFilter, dryRun)
 	}
 	return 0, nil
+}
+func (m *mockTrackStore) GetAllProjections(ctx context.Context, limit int) ([]db.TrackProjection, error) {
+	if m.getAllProjectionsFunc != nil {
+		return m.getAllProjectionsFunc(ctx, limit)
+	}
+	return []db.TrackProjection{}, nil
+}
+func (m *mockTrackStore) ComputeAndSaveAllProjections(ctx context.Context) (int, error) {
+	if m.computeAllProjectionsFunc != nil {
+		return m.computeAllProjectionsFunc(ctx)
+	}
+	return 0, nil
+}
+func (m *mockTrackStore) GetTaxonomyTree(ctx context.Context) ([]*db.TaxonomyNode, error) {
+	if m.getTaxonomyTreeFunc != nil {
+		return m.getTaxonomyTreeFunc(ctx)
+	}
+	return []*db.TaxonomyNode{}, nil
+}
+func (m *mockTrackStore) AddTaxonomyNode(ctx context.Context, parentID *int, name, description, source string) (*db.TaxonomyNode, error) {
+	if m.addTaxonomyNodeFunc != nil {
+		return m.addTaxonomyNodeFunc(ctx, parentID, name, description, source)
+	}
+	return &db.TaxonomyNode{Name: name, Source: source}, nil
+}
+func (m *mockTrackStore) GetTrackLabel(ctx context.Context, trackID int64) (*db.TrackLabel, error) {
+	if m.getTrackLabelFunc != nil {
+		return m.getTrackLabelFunc(ctx, trackID)
+	}
+	return nil, errors.New("not found")
+}
+func (m *mockTrackStore) SetTrackLabel(ctx context.Context, trackID int64, labelPath []string, curatedBy, notes string) (*db.TrackLabel, error) {
+	if m.setTrackLabelFunc != nil {
+		return m.setTrackLabelFunc(ctx, trackID, labelPath, curatedBy, notes)
+	}
+	return &db.TrackLabel{TrackID: trackID, LabelPath: labelPath}, nil
+}
+func (m *mockTrackStore) GetLabelsByPath(ctx context.Context, path []string) ([]db.TrackLabel, error) {
+	if m.getLabelsByPathFunc != nil {
+		return m.getLabelsByPathFunc(ctx, path)
+	}
+	return []db.TrackLabel{}, nil
+}
+func (m *mockTrackStore) AutoLabelTrack(ctx context.Context, trackID int64) (*db.TrackLabel, error) {
+	if m.autoLabelTrackFunc != nil {
+		return m.autoLabelTrackFunc(ctx, trackID)
+	}
+	return &db.TrackLabel{TrackID: trackID, AutoLabelPath: []string{"serenity"}}, nil
 }
 
 func newTestHandlers(store TrackStore) *Handlers {

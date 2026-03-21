@@ -30,6 +30,16 @@ type TrackStore interface {
 	GetSimilarityStats(ctx context.Context) (db.SimilarityStats, error)
 	ComputeSimilarity(ctx context.Context, k int) (int, error)
 	ResetTracksForReanalysis(ctx context.Context, statusFilter string, dryRun bool) (int64, error)
+	// Projection (2-D emotion map)
+	GetAllProjections(ctx context.Context, limit int) ([]db.TrackProjection, error)
+	ComputeAndSaveAllProjections(ctx context.Context) (int, error)
+	// Taxonomy + curation
+	GetTaxonomyTree(ctx context.Context) ([]*db.TaxonomyNode, error)
+	AddTaxonomyNode(ctx context.Context, parentID *int, name, description, source string) (*db.TaxonomyNode, error)
+	GetTrackLabel(ctx context.Context, trackID int64) (*db.TrackLabel, error)
+	SetTrackLabel(ctx context.Context, trackID int64, labelPath []string, curatedBy, notes string) (*db.TrackLabel, error)
+	GetLabelsByPath(ctx context.Context, path []string) ([]db.TrackLabel, error)
+	AutoLabelTrack(ctx context.Context, trackID int64) (*db.TrackLabel, error)
 }
 
 type Handlers struct {
@@ -508,4 +518,178 @@ func (h *Handlers) ReanalyzeTracksHandler(w http.ResponseWriter, r *http.Request
 		"dry_run":       req.DryRun,
 		"message":       message,
 	})
+}
+
+// ─── Projection handlers ───────────────────────────────────────────────────────
+
+// GetProjectionsHandler handles GET /api/v1/projections
+// Returns all 2-D coordinates for the emotion map. Default limit=10000.
+func (h *Handlers) GetProjectionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 10000
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 20000 {
+			limit = v
+		}
+	}
+	projections, err := h.db.GetAllProjections(r.Context(), limit)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("GetProjectionsHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to retrieve projections")
+		return
+	}
+	if projections == nil {
+		projections = []db.TrackProjection{}
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"projections": projections,
+		"count":       len(projections),
+	})
+}
+
+// RecomputeProjectionsHandler handles POST /api/v1/projections/recompute
+// Recomputes 2-D projections for all tracks that have emotion data.
+func (h *Handlers) RecomputeProjectionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	count, err := h.db.ComputeAndSaveAllProjections(r.Context())
+	if err != nil {
+		h.log.Error(fmt.Sprintf("RecomputeProjectionsHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to recompute projections")
+		return
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"recomputed": count,
+		"message":    fmt.Sprintf("Recomputed projections for %d tracks", count),
+	})
+}
+
+// ─── Taxonomy handlers ────────────────────────────────────────────────────────
+
+// GetTaxonomyHandler handles GET /api/v1/taxonomy
+func (h *Handlers) GetTaxonomyHandler(w http.ResponseWriter, r *http.Request) {
+	tree, err := h.db.GetTaxonomyTree(r.Context())
+	if err != nil {
+		h.log.Error(fmt.Sprintf("GetTaxonomyHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to retrieve taxonomy")
+		return
+	}
+	if tree == nil {
+		tree = []*db.TaxonomyNode{}
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{"nodes": tree, "count": len(tree)})
+}
+
+// AddTaxonomyNodeHandler handles POST /api/v1/taxonomy/nodes
+func (h *Handlers) AddTaxonomyNodeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ParentID    *int   `json:"parent_id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Source      string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		JSONError(w, http.StatusBadRequest, "body must include a non-empty 'name'")
+		return
+	}
+	if req.Source == "" {
+		req.Source = "user"
+	}
+	node, err := h.db.AddTaxonomyNode(r.Context(), req.ParentID, req.Name, req.Description, req.Source)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("AddTaxonomyNodeHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "Failed to add taxonomy node")
+		return
+	}
+	JSON(w, http.StatusCreated, node)
+}
+
+// ─── Track label handlers (sub-resource of /api/v1/tracks/:id) ───────────────
+
+// GetTrackLabelHandler handles GET /api/v1/tracks/:id/label
+func (h *Handlers) GetTrackLabelHandler(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/"), "/")
+	if len(parts) < 2 || parts[0] == "" {
+		JSONError(w, http.StatusBadRequest, "track ID is required")
+		return
+	}
+	trackID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		JSONError(w, http.StatusBadRequest, "invalid track ID")
+		return
+	}
+	label, err := h.db.GetTrackLabel(r.Context(), trackID)
+	if err != nil {
+		// No label yet — return the auto label
+		autoLabel, autoErr := h.db.AutoLabelTrack(r.Context(), trackID)
+		if autoErr != nil {
+			JSONError(w, http.StatusNotFound, "no label found for this track")
+			return
+		}
+		JSON(w, http.StatusOK, autoLabel)
+		return
+	}
+	JSON(w, http.StatusOK, label)
+}
+
+// SetTrackLabelHandler handles POST /api/v1/tracks/:id/label
+func (h *Handlers) SetTrackLabelHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/"), "/")
+	if len(parts) < 2 || parts[0] == "" {
+		JSONError(w, http.StatusBadRequest, "track ID is required")
+		return
+	}
+	trackID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		JSONError(w, http.StatusBadRequest, "invalid track ID")
+		return
+	}
+	var req struct {
+		LabelPath []string `json:"label_path"`
+		CuratedBy string   `json:"curated_by"`
+		Notes     string   `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	label, err := h.db.SetTrackLabel(r.Context(), trackID, req.LabelPath, req.CuratedBy, req.Notes)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("SetTrackLabelHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "failed to save label")
+		return
+	}
+	JSON(w, http.StatusOK, label)
+}
+
+// GetLabelsByPathHandler handles GET /api/v1/labels?path=zone/subzone
+func (h *Handlers) GetLabelsByPathHandler(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	var path []string
+	if rawPath != "" {
+		for _, seg := range strings.Split(rawPath, "/") {
+			if trimmed := strings.TrimSpace(seg); trimmed != "" {
+				path = append(path, trimmed)
+			}
+		}
+	}
+	labels, err := h.db.GetLabelsByPath(r.Context(), path)
+	if err != nil {
+		h.log.Error(fmt.Sprintf("GetLabelsByPathHandler: %v", err))
+		JSONError(w, http.StatusInternalServerError, "failed to retrieve labels")
+		return
+	}
+	if labels == nil {
+		labels = []db.TrackLabel{}
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{"labels": labels, "count": len(labels), "path": path})
 }

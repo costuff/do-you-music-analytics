@@ -389,6 +389,18 @@ func main() {
 				if err := database.SaveEmotions(shutdownCtx, &emotions); err != nil {
 					log.Error(fmt.Sprintf("Worker %d: Failed to save emotions for track %d: %v",
 						workerID, track.ID, err))
+				} else {
+					// Compute 2-D projection from emotion vector (used by hierarchical map)
+					proj := db.ComputeProjection(emotions)
+					if err := database.SaveProjection(shutdownCtx, proj); err != nil {
+						log.Error(fmt.Sprintf("Worker %d: Failed to save projection for track %d: %v",
+							workerID, track.ID, err))
+					}
+					// Auto-label: store dominant emotion zone as the system-proposed label
+					if _, err := database.AutoLabelTrack(shutdownCtx, int64(track.ID)); err != nil {
+						log.Error(fmt.Sprintf("Worker %d: Failed to auto-label track %d: %v",
+							workerID, track.ID, err))
+					}
 				}
 
 				// Update status to completed

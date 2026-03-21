@@ -70,6 +70,13 @@ func main() {
 	mux.HandleFunc("/api/v1/emotions/distribution", handlers.GetEmotionsDistributionHandler)
 	mux.HandleFunc("/api/v1/similarity/recompute", handlers.RecomputeSimilarityHandler)
 	mux.HandleFunc("/api/v1/similarity/stats", handlers.GetSimilarityStatsHandler)
+	// Projections
+	mux.HandleFunc("/api/v1/projections", handlers.GetProjectionsHandler)
+	mux.HandleFunc("/api/v1/projections/recompute", handlers.RecomputeProjectionsHandler)
+	// Taxonomy + curation
+	mux.HandleFunc("/api/v1/taxonomy", handlers.GetTaxonomyHandler)
+	mux.HandleFunc("/api/v1/taxonomy/nodes", handlers.AddTaxonomyNodeHandler)
+	mux.HandleFunc("/api/v1/labels", handlers.GetLabelsByPathHandler)
 
 	// Apply middleware
 	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
@@ -141,6 +148,13 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 				return
 			case "similar":
 				handlers.GetSimilarTracksHandler(w, r)
+				return
+			case "label":
+				if r.Method == http.MethodPost {
+					handlers.SetTrackLabelHandler(w, r)
+				} else {
+					handlers.GetTrackLabelHandler(w, r)
+				}
 				return
 			}
 		}
