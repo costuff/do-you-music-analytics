@@ -100,11 +100,11 @@ func (db *DB) RunMigrations(ctx context.Context, migrationsFS embed.FS) error {
 			return fmt.Errorf("begin tx for %s: %w", version, err)
 		}
 		if _, err := tx.Exec(ctx, string(sql)); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 			return fmt.Errorf("record migration %s: %w", version, err)
 		}
 		if err := tx.Commit(ctx); err != nil {

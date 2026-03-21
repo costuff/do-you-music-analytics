@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,18 +18,19 @@ import (
 
 // mockTrackStore implements TrackStore for testing.
 type mockTrackStore struct {
-	getTrackStatsFunc            func(ctx context.Context) (map[string]int64, error)
-	listTracksFunc               func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
-	getTrackByIDFunc             func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
-	searchTracksFunc             func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
-	getFailedTracksFunc          func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
-	getRecentCompletedTracksFunc func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
-	getEmotionsFunc              func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
-	getEmotionsDistributionFunc  func(ctx context.Context) ([]db.EmotionDistribution, error)
-	getAllEmotionsFunc           func(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
-	getSimilarTracksFunc         func(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error)
-	getSimilarityStatsFunc       func(ctx context.Context) (db.SimilarityStats, error)
-	computeSimilarityFunc        func(ctx context.Context, k int) (int, error)
+	getTrackStatsFunc              func(ctx context.Context) (map[string]int64, error)
+	listTracksFunc                 func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
+	getTrackByIDFunc               func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
+	searchTracksFunc               func(ctx context.Context, query string, limit int) ([]db.TrackWithFeatures, error)
+	getFailedTracksFunc            func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getRecentCompletedTracksFunc   func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error)
+	getEmotionsFunc                func(ctx context.Context, trackID int64) (*db.TrackEmotions, error)
+	getEmotionsDistributionFunc    func(ctx context.Context) ([]db.EmotionDistribution, error)
+	getAllEmotionsFunc              func(ctx context.Context, limit, offset int) ([]db.TrackEmotions, int64, error)
+	getSimilarTracksFunc           func(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error)
+	getSimilarityStatsFunc         func(ctx context.Context) (db.SimilarityStats, error)
+	computeSimilarityFunc          func(ctx context.Context, k int) (int, error)
+	resetTracksForReanalysisFunc   func(ctx context.Context, statusFilter string, dryRun bool) (int64, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -83,6 +87,13 @@ func (m *mockTrackStore) GetSimilarityStats(ctx context.Context) (db.SimilarityS
 func (m *mockTrackStore) ComputeSimilarity(ctx context.Context, k int) (int, error) {
 	if m.computeSimilarityFunc != nil {
 		return m.computeSimilarityFunc(ctx, k)
+	}
+	return 0, nil
+}
+
+func (m *mockTrackStore) ResetTracksForReanalysis(ctx context.Context, statusFilter string, dryRun bool) (int64, error) {
+	if m.resetTracksForReanalysisFunc != nil {
+		return m.resetTracksForReanalysisFunc(ctx, statusFilter, dryRun)
 	}
 	return 0, nil
 }
@@ -1034,6 +1045,299 @@ func TestGetSimilarityStatsHandler_DBError(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.GetSimilarityStatsHandler(w, req)
 
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// ---- ExportTracksHandler ----
+
+func makeTrackWithFeatures() db.TrackWithFeatures {
+	bpm := 128.5
+	key := "C"
+	mode := "Major"
+	dur := 240.0
+	loud := -8.5
+	energy := 0.7
+	dance := 0.8
+	valence := 0.6
+	acou := 0.1
+	instru := 0.05
+	speech := 0.03
+	live := 0.12
+	melo := 0.55
+	return db.TrackWithFeatures{
+		ID:             1,
+		FileName:       "track.mp3",
+		FilePath:       "/music/track.mp3",
+		AnalysisStatus: "completed",
+		Features: &db.AudioFeatures{
+			BPM: &bpm, Key: &key, Mode: &mode,
+			DurationSeconds: &dur, LoudnessDB: &loud,
+			Energy: &energy, Danceability: &dance, Valence: &valence,
+			Acousticness: &acou, Instrumentalness: &instru,
+			Speechiness: &speech, Liveness: &live, Melodicness: &melo,
+		},
+	}
+}
+
+func TestExportTracksHandler_JSON(t *testing.T) {
+	track := makeTrackWithFeatures()
+	store := &mockTrackStore{
+		listTracksFunc: func(_ context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return []db.TrackWithFeatures{track}, 1, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?format=json", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	tracks, ok := result["tracks"].([]interface{})
+	if !ok || len(tracks) != 1 {
+		t.Errorf("expected 1 track in response, got %v", result["tracks"])
+	}
+}
+
+func TestExportTracksHandler_CSV(t *testing.T) {
+	track := makeTrackWithFeatures()
+	store := &mockTrackStore{
+		listTracksFunc: func(_ context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return []db.TrackWithFeatures{track}, 1, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?format=csv&status=completed", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/csv" {
+		t.Errorf("expected text/csv, got %q", ct)
+	}
+	r := csv.NewReader(bytes.NewReader(w.Body.Bytes()))
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("invalid CSV: %v", err)
+	}
+	if len(records) < 2 {
+		t.Fatalf("expected header + 1 data row, got %d rows", len(records))
+	}
+	if records[0][0] != "id" {
+		t.Errorf("expected first column header 'id', got %q", records[0][0])
+	}
+}
+
+func TestExportTracksHandler_CSVNoFeatures(t *testing.T) {
+	track := db.TrackWithFeatures{
+		ID:             2,
+		FileName:       "bare.mp3",
+		FilePath:       "/music/bare.mp3",
+		AnalysisStatus: "pending",
+		Features:       nil,
+	}
+	store := &mockTrackStore{
+		listTracksFunc: func(_ context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return []db.TrackWithFeatures{track}, 1, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?format=csv", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	r := csv.NewReader(bytes.NewReader(w.Body.Bytes()))
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("invalid CSV: %v", err)
+	}
+	// Header + 1 track row with empty feature columns
+	if len(records) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(records))
+	}
+}
+
+func TestExportTracksHandler_InvalidFormat(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?format=xml", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestExportTracksHandler_InvalidLimit(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?limit=bad", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestExportTracksHandler_WrongMethod(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/export", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestExportTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		listTracksFunc: func(_ context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			return nil, 0, errors.New("db down")
+		},
+	}
+	h := newTestHandlers(store)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestExportTracksHandler_LimitClamped(t *testing.T) {
+	// Limit > 10000 should be clamped silently to 10000
+	store := &mockTrackStore{
+		listTracksFunc: func(_ context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error) {
+			if limit > 10000 {
+				t.Errorf("limit %d exceeded max 10000", limit)
+			}
+			return nil, 0, nil
+		},
+	}
+	h := newTestHandlers(store)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/export?limit=99999", nil)
+	w := httptest.NewRecorder()
+	h.ExportTracksHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+// ---- ReanalyzeTracksHandler ----
+
+func TestReanalyzeTracksHandler_DryRun(t *testing.T) {
+	store := &mockTrackStore{
+		resetTracksForReanalysisFunc: func(_ context.Context, statusFilter string, dryRun bool) (int64, error) {
+			if statusFilter != "failed" {
+				t.Errorf("expected statusFilter=failed, got %q", statusFilter)
+			}
+			if !dryRun {
+				t.Error("expected dryRun=true")
+			}
+			return 42, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	body := `{"status_filter":"failed","dry_run":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/reanalyze", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["count"] != float64(42) {
+		t.Errorf("expected count=42, got %v", result["count"])
+	}
+	msg, _ := result["message"].(string)
+	if !strings.Contains(msg, "dry run") {
+		t.Errorf("expected dry run message, got %q", msg)
+	}
+}
+
+func TestReanalyzeTracksHandler_Live(t *testing.T) {
+	store := &mockTrackStore{
+		resetTracksForReanalysisFunc: func(_ context.Context, statusFilter string, dryRun bool) (int64, error) {
+			return 100, nil
+		},
+	}
+	h := newTestHandlers(store)
+
+	body := `{"status_filter":"all"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/reanalyze", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestReanalyzeTracksHandler_InvalidFilter(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	body := `{"status_filter":"unknown"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/reanalyze", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestReanalyzeTracksHandler_WrongMethod(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/reanalyze", nil)
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestReanalyzeTracksHandler_InvalidBody(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/reanalyze", strings.NewReader("{invalid json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestReanalyzeTracksHandler_DBError(t *testing.T) {
+	store := &mockTrackStore{
+		resetTracksForReanalysisFunc: func(_ context.Context, statusFilter string, dryRun bool) (int64, error) {
+			return 0, errors.New("db error")
+		},
+	}
+	h := newTestHandlers(store)
+	body := `{"status_filter":"failed"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracks/reanalyze", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ReanalyzeTracksHandler(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
 	}

@@ -170,7 +170,8 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 		if !fileExists {
 			stats.MissingTracks++
 
-			if action == "mark" {
+			switch action {
+			case "mark":
 				// Mark as missing
 				updateQuery := `
 						UPDATE tracks 
@@ -183,7 +184,7 @@ func (db *DB) CleanupMissingTracks(ctx context.Context, musicDir string, action 
 					return stats, fmt.Errorf("failed to mark track %d as missing: %w", track.id, err)
 				}
 				stats.MarkedMissing++
-			} else if action == "delete" {
+			case "delete":
 				// Delete from database
 				deleteQuery := `DELETE FROM tracks WHERE id = $1`
 				_, err := db.pool.Exec(ctx, deleteQuery, track.id)

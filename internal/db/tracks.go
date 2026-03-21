@@ -91,7 +91,7 @@ func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) // Rollback if not committed
+	defer tx.Rollback(ctx) //nolint:errcheck // intentional: rollback if not committed
 
 	// Get one pending track with row-level lock
 	query := `
@@ -361,4 +361,38 @@ func (db *DB) GetRecentCompletedTracks(ctx context.Context, limit int) ([]TrackW
 	}
 
 	return tracks, nil
+}
+
+// ResetTracksForReanalysis resets analysis_status to 'pending' for tracks that
+// match statusFilter ("failed", "completed", or "all").  When dryRun is true the
+// database is not changed and only the count of matching tracks is returned.
+func (db *DB) ResetTracksForReanalysis(ctx context.Context, statusFilter string, dryRun bool) (int64, error) {
+	var whereClause string
+	switch statusFilter {
+	case "failed":
+		whereClause = "analysis_status = 'failed'"
+	case "completed":
+		whereClause = "analysis_status = 'completed'"
+	case "all":
+		whereClause = "analysis_status IN ('failed', 'completed')"
+	default:
+		return 0, fmt.Errorf("invalid status_filter: %q", statusFilter)
+	}
+
+	if dryRun {
+		var count int64
+		row := db.pool.QueryRow(ctx, "SELECT COUNT(*) FROM tracks WHERE "+whereClause)
+		if err := row.Scan(&count); err != nil {
+			return 0, fmt.Errorf("count query failed: %w", err)
+		}
+		return count, nil
+	}
+
+	tag, err := db.pool.Exec(ctx,
+		"UPDATE tracks SET analysis_status = 'pending', analysis_error = NULL, analyzed_at = NULL WHERE "+whereClause,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("update failed: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

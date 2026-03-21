@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -27,6 +29,7 @@ type TrackStore interface {
 	GetSimilarTracks(ctx context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error)
 	GetSimilarityStats(ctx context.Context) (db.SimilarityStats, error)
 	ComputeSimilarity(ctx context.Context, k int) (int, error)
+	ResetTracksForReanalysis(ctx context.Context, statusFilter string, dryRun bool) (int64, error)
 }
 
 type Handlers struct {
@@ -339,4 +342,170 @@ func (h *Handlers) GetSimilarityStatsHandler(w http.ResponseWriter, r *http.Requ
 		"recomputing":     h.recomputeInProgress.Load(),
 	}
 	JSON(w, http.StatusOK, stats2)
+}
+
+// ExportTracksHandler handles GET /api/v1/tracks/export
+// Query params:
+//   - format=json|csv  (default: json)
+//   - status=completed|failed|pending|analyzing|all  (default: completed)
+//   - limit=<n>  (default 1000, max 10000)
+func (h *Handlers) ExportTracksHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	format := strings.ToLower(r.URL.Query().Get("format"))
+	if format == "" {
+		format = "json"
+	}
+	if format != "json" && format != "csv" {
+		http.Error(w, `invalid format: use "json" or "csv"`, http.StatusBadRequest)
+		return
+	}
+
+	status := strings.ToLower(r.URL.Query().Get("status"))
+	if status == "" || status == "all" {
+		status = "" // empty = no filter in ListTracks
+	}
+
+	limit := 1000
+	if s := r.URL.Query().Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if n > 10000 {
+			n = 10000
+		}
+		limit = n
+	}
+
+	tracks, _, err := h.db.ListTracks(r.Context(), limit, 0, status)
+	if err != nil {
+		h.log.Errorf("ExportTracks: db error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	switch format {
+	case "csv":
+		h.exportTrackCSV(w, tracks)
+	default:
+		w.Header().Set("Content-Disposition", `attachment; filename="tracks.json"`)
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"tracks": tracks,
+			"count":  len(tracks),
+		})
+	}
+}
+
+// exportTrackCSV writes tracks as CSV to w.
+func (h *Handlers) exportTrackCSV(w http.ResponseWriter, tracks []db.TrackWithFeatures) {
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", `attachment; filename="tracks.csv"`)
+
+	cw := csv.NewWriter(w)
+	header := []string{
+		"id", "file_name", "file_path", "status",
+		"bpm", "key", "mode", "duration_seconds", "loudness_db",
+		"energy", "danceability", "valence", "acousticness",
+		"instrumentalness", "speechiness", "liveness", "melodicness",
+	}
+	if err := cw.Write(header); err != nil {
+		return
+	}
+
+	fmtF := func(p *float64) string {
+		if p == nil {
+			return ""
+		}
+		return strconv.FormatFloat(*p, 'f', 4, 64)
+	}
+	fmtS := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
+
+	for i := range tracks {
+		t := &tracks[i]
+		row := []string{
+			strconv.FormatInt(t.ID, 10),
+			t.FileName,
+			t.FilePath,
+			t.AnalysisStatus,
+		}
+		if t.Features != nil {
+			row = append(row,
+				fmtF(t.Features.BPM),
+				fmtS(t.Features.Key),
+				fmtS(t.Features.Mode),
+				fmtF(t.Features.DurationSeconds),
+				fmtF(t.Features.LoudnessDB),
+				fmtF(t.Features.Energy),
+				fmtF(t.Features.Danceability),
+				fmtF(t.Features.Valence),
+				fmtF(t.Features.Acousticness),
+				fmtF(t.Features.Instrumentalness),
+				fmtF(t.Features.Speechiness),
+				fmtF(t.Features.Liveness),
+				fmtF(t.Features.Melodicness),
+			)
+		} else {
+			for range header[4:] {
+				row = append(row, "")
+			}
+		}
+		if err := cw.Write(row); err != nil {
+			return
+		}
+	}
+	cw.Flush()
+}
+
+// ReanalyzeTracksHandler handles POST /api/v1/tracks/reanalyze
+// Body (JSON):
+//   - status_filter: "failed" | "completed" | "all"  (required)
+//   - dry_run: bool  (optional, default false)
+func (h *Handlers) ReanalyzeTracksHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		StatusFilter string `json:"status_filter"`
+		DryRun       bool   `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	allowed := map[string]bool{"failed": true, "completed": true, "all": true}
+	if !allowed[req.StatusFilter] {
+		http.Error(w, `status_filter must be "failed", "completed", or "all"`, http.StatusBadRequest)
+		return
+	}
+
+	count, err := h.db.ResetTracksForReanalysis(r.Context(), req.StatusFilter, req.DryRun)
+	if err != nil {
+		h.log.Errorf("ReanalyzeTracksHandler: db error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	message := fmt.Sprintf("%d tracks queued for re-analysis", count)
+	if req.DryRun {
+		message = fmt.Sprintf("%d tracks would be queued for re-analysis (dry run)", count)
+	}
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"count":         count,
+		"status_filter": req.StatusFilter,
+		"dry_run":       req.DryRun,
+		"message":       message,
+	})
 }

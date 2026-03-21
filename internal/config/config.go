@@ -118,7 +118,7 @@ func (c *Config) Validate() error {
 
 	// Validate Python and analysis script paths
 	if _, err := os.Stat(c.PythonPath); os.IsNotExist(err) {
-		return fmt.Errorf("Python executable not found: %s", c.PythonPath)
+		return fmt.Errorf("python executable not found: %s", c.PythonPath)
 	}
 
 	if _, err := os.Stat(c.AnalysisScript); os.IsNotExist(err) {

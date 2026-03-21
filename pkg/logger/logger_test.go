@@ -109,3 +109,44 @@ func TestGetZerolog(t *testing.T) {
 	// GetZerolog should return a usable zerolog.Logger
 	zl.Info().Msg("direct zerolog call")
 }
+
+// ---- Global logger functions ----
+
+func TestGlobalLogger_InitAndMethods(t *testing.T) {
+	// Initialize the global logger before exercising global functions.
+	Init("debug", false)
+
+	// None of these should panic.
+	Debug("global debug")
+	Debugf("global debug %d", 1)
+	Info("global info")
+	Infof("global info %d", 2)
+	Warn("global warn")
+	Warnf("global warn %d", 3)
+	Error("global error")
+	Errorf("global error %d", 4)
+	ErrorWithErr(errors.New("test"), "global error with err")
+}
+
+func TestGlobalLogger_InitProduction(t *testing.T) {
+	Init("info", true)
+	Info("production global info")
+}
+
+func TestGlobalLogger_WhenNil(t *testing.T) {
+	// Save and restore global to test nil-guard branches.
+	orig := global
+	global = nil
+	t.Cleanup(func() { global = orig })
+
+	// None of these should panic when global == nil.
+	Debug("no-op")
+	Debugf("no-op %d", 0)
+	Info("no-op")
+	Infof("no-op %d", 0)
+	Warn("no-op")
+	Warnf("no-op %d", 0)
+	Error("no-op")
+	Errorf("no-op %d", 0)
+	ErrorWithErr(errors.New("x"), "no-op")
+}

@@ -64,6 +64,8 @@ func main() {
 	mux.HandleFunc("/api/v1/tracks/", routeTrackByID(handlers))
 	mux.HandleFunc("/api/v1/tracks/search", handlers.SearchTracksHandler)
 	mux.HandleFunc("/api/v1/tracks/failed", handlers.FailedTracksHandler)
+	mux.HandleFunc("/api/v1/tracks/export", handlers.ExportTracksHandler)
+	mux.HandleFunc("/api/v1/tracks/reanalyze", handlers.ReanalyzeTracksHandler)
 	mux.HandleFunc("/api/v1/emotions", handlers.GetAllEmotionsHandler)
 	mux.HandleFunc("/api/v1/emotions/distribution", handlers.GetEmotionsDistributionHandler)
 	mux.HandleFunc("/api/v1/similarity/recompute", handlers.RecomputeSimilarityHandler)
@@ -124,8 +126,8 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 			return
 		}
 
-		// If path is "search" or "failed", those are handled by specific routes
-		if path == "search" || path == "failed" {
+		// If path is "search", "failed", "export", or "reanalyze", those are handled by specific routes
+		if path == "search" || path == "failed" || path == "export" || path == "reanalyze" {
 			http.NotFound(w, r)
 			return
 		}

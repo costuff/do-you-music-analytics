@@ -230,8 +230,47 @@ func main() {
 		}
 	}()
 
+	// Start periodic observability reporter — logs throughput, error rate, and
+	// idle state every hour so metrics are visible in Docker logs without
+	// requiring a dedicated metrics stack.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reportTicker := time.NewTicker(1 * time.Hour)
+		defer reportTicker.Stop()
+
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				return
+			case <-reportTicker.C:
+				elapsed := time.Since(startTime)
+				p := processed.Load()
+				f := failed.Load()
+				total := p + f
+				var tracksPerHour float64
+				var errorRate float64
+				if elapsed > 0 {
+					tracksPerHour = float64(p) / elapsed.Hours()
+				}
+				if total > 0 {
+					errorRate = float64(f) / float64(total) * 100
+				}
+				log.Info(fmt.Sprintf(
+					"📈 Hourly report | processed=%d failed=%d rate=%.1f/hr error_rate=%.1f%% uptime=%v",
+					p, f, tracksPerHour, errorRate, elapsed.Round(time.Minute),
+				))
+				if errorRate > 20 {
+					log.Warn(fmt.Sprintf("⚠️  High error rate: %.1f%% — check Python analyzer or file paths", errorRate))
+				}
+			}
+		}
+	}()
+
 	workerFunc := func(workerID int) {
 		defer wg.Done()
+
+		var consecutiveFailures int
 
 		for {
 			select {
@@ -270,8 +309,18 @@ func main() {
 					log.Error(fmt.Sprintf("Worker %d: Analysis failed for %s: %v", workerID, track.FilePath, err))
 					_ = database.UpdateTrackStatus(shutdownCtx, track.ID, "failed", &errMsg)
 					failed.Add(1)
+					consecutiveFailures++
+					if consecutiveFailures >= 3 {
+						backoff := time.Duration(consecutiveFailures) * 5 * time.Second
+						if backoff > 60*time.Second {
+							backoff = 60 * time.Second
+						}
+						log.Warn(fmt.Sprintf("Worker %d: %d consecutive failures, backing off %v", workerID, consecutiveFailures, backoff))
+						time.Sleep(backoff)
+					}
 					continue
 				}
+				consecutiveFailures = 0
 
 				// Convert analyzer features to database features
 				dbFeatures := &db.AudioFeatures{

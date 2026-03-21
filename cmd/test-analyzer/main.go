@@ -60,12 +60,12 @@ func main() {
 	fmt.Printf("Track ID: %d\n", trackID)
 	fmt.Println("Analyzing (this may take 30-60s)...")
 
-	database.UpdateTrackStatus(ctx, trackID, "analyzing", nil)
+	_ = database.UpdateTrackStatus(ctx, trackID, "analyzing", nil) //nolint:errcheck // best-effort status update
 
 	features, err := a.AnalyzeFile(ctx, audioFile)
 	if err != nil {
 		errMsg := err.Error()
-		database.UpdateTrackStatus(ctx, trackID, "failed", &errMsg)
+		_ = database.UpdateTrackStatus(ctx, trackID, "failed", &errMsg) //nolint:errcheck // best-effort status update
 		log.Fatalf("Analysis failed: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func main() {
 		log.Fatalf("Save failed: %v", err)
 	}
 
-	database.UpdateTrackStatus(ctx, trackID, "completed", nil)
+	_ = database.UpdateTrackStatus(ctx, trackID, "completed", nil) //nolint:errcheck // best-effort status update
 
 	fmt.Println("\n✅ Analysis complete and saved to database!")
 }

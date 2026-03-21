@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v", err)
 	}
-	defer conn.Close(ctx)
+	defer conn.Close(ctx) //nolint:errcheck // best-effort cleanup
 
 	fmt.Println("✅ Connected to PostgreSQL")
 
@@ -126,13 +126,13 @@ func migrateUp(ctx context.Context, conn *pgx.Conn) error {
 
 		_, err = tx.Exec(ctx, string(sql))
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 			return fmt.Errorf("failed to apply %s: %w", version, err)
 		}
 
 		_, err = tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version)
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 			return fmt.Errorf("failed to record migration: %w", err)
 		}
 
@@ -186,13 +186,13 @@ func migrateDown(ctx context.Context, conn *pgx.Conn) error {
 
 	_, err = tx.Exec(ctx, string(sql))
 	if err != nil {
-		tx.Rollback(ctx)
+		_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 		return fmt.Errorf("failed to rollback %s: %w", lastVersion, err)
 	}
 
 	_, err = tx.Exec(ctx, "DELETE FROM schema_migrations WHERE version = $1", lastVersion)
 	if err != nil {
-		tx.Rollback(ctx)
+		_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
 		return fmt.Errorf("failed to remove migration record: %w", err)
 	}
 
