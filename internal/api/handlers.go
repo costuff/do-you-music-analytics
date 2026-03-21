@@ -40,6 +40,7 @@ type TrackStore interface {
 	SetTrackLabel(ctx context.Context, trackID int64, labelPath []string, curatedBy, notes string) (*db.TrackLabel, error)
 	GetLabelsByPath(ctx context.Context, path []string) ([]db.TrackLabel, error)
 	AutoLabelTrack(ctx context.Context, trackID int64) (*db.TrackLabel, error)
+	AutoLabelAll(ctx context.Context) (int, error)
 }
 
 type Handlers struct {
@@ -670,6 +671,28 @@ func (h *Handlers) SetTrackLabelHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	JSON(w, http.StatusOK, label)
+}
+
+// AutoLabelAllHandler handles POST /api/v1/labels/auto-label-all
+// Runs in the background and returns immediately with a job count.
+func (h *Handlers) AutoLabelAllHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		n, err := h.db.AutoLabelAll(ctx)
+		if err != nil {
+			h.log.Error(fmt.Sprintf("AutoLabelAll: %v", err))
+			return
+		}
+		h.log.Info(fmt.Sprintf("AutoLabelAll: labelled %d tracks", n))
+	}()
+	JSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "running",
+		"message": "auto-labelling all tracks in background",
+	})
 }
 
 // GetLabelsByPathHandler handles GET /api/v1/labels?path=zone/subzone

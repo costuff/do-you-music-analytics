@@ -190,6 +190,49 @@ func (db *DB) GetLabelsByPath(ctx context.Context, path []string) ([]TrackLabel,
 	return out, rows.Err()
 }
 
+// AutoLabelAll inserts/updates auto_label_path for every track that has a
+// projection but no track_label row yet (or whose auto_label_path is empty).
+// Returns the number of tracks labelled.
+func (db *DB) AutoLabelAll(ctx context.Context) (int, error) {
+	rows, err := db.pool.Query(ctx,
+		`SELECT track_id, zone FROM track_projections WHERE zone <> '' ORDER BY track_id`)
+	if err != nil {
+		return 0, fmt.Errorf("query projections: %w", err)
+	}
+	defer rows.Close()
+
+	type proj struct {
+		trackID int64
+		zone    string
+	}
+	var projs []proj
+	for rows.Next() {
+		var p proj
+		if err := rows.Scan(&p.trackID, &p.zone); err != nil {
+			return 0, err
+		}
+		projs = append(projs, p)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, p := range projs {
+		pathJSON, _ := json.Marshal([]string{p.zone})
+		_, err := db.pool.Exec(ctx, `
+			INSERT INTO track_labels (track_id, auto_label_path, label_path)
+			VALUES ($1, $2, $2)
+			ON CONFLICT (track_id) DO UPDATE SET auto_label_path = EXCLUDED.auto_label_path
+		`, p.trackID, pathJSON)
+		if err != nil {
+			continue // best-effort; don't abort the whole batch
+		}
+		count++
+	}
+	return count, nil
+}
+
 // resolveAutoLabel finds the dominant emotion zone for a track by querying
 // track_projections. Falls back to an empty slice if the projection is missing.
 func (db *DB) resolveAutoLabel(ctx context.Context, trackID int64) []string {

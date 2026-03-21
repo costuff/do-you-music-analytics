@@ -77,6 +77,7 @@ func main() {
 	mux.HandleFunc("/api/v1/taxonomy", handlers.GetTaxonomyHandler)
 	mux.HandleFunc("/api/v1/taxonomy/nodes", handlers.AddTaxonomyNodeHandler)
 	mux.HandleFunc("/api/v1/labels", handlers.GetLabelsByPathHandler)
+	mux.HandleFunc("/api/v1/labels/auto-label-all", handlers.AutoLabelAllHandler)
 
 	// Apply middleware
 	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
