@@ -68,7 +68,7 @@ func (h *Handlers) ListTracksHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 2000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
 			limit = l
 		}
 	}
@@ -116,7 +116,7 @@ func (h *Handlers) SearchTracksHandler(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 2000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
 			limit = l
 		}
 	}
@@ -133,7 +133,7 @@ func (h *Handlers) FailedTracksHandler(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 2000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
 			limit = l
 		}
 	}
