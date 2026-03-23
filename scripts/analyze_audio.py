@@ -202,30 +202,13 @@ def extract_audio_features(file_path: str, quiet: bool = False, quick_mode: bool
         features["bpm"] = None
         features["bpm_error"] = str(e)
     
-    # Key and mode detection (Chroma-based, Krumhansl-Kessler profiles)
-    try:
-        log("Detecting key and mode...")
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-        chroma_mean = np.mean(chroma, axis=1)
-        key_index = int(np.argmax(chroma_mean))
-        keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-        features["key"] = keys[key_index]
-
-        # Krumhansl-Kessler tonal hierarchy profiles
-        major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-        minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-        rotated_major = np.roll(major_profile, -key_index)
-        rotated_minor = np.roll(minor_profile, -key_index)
-        major_corr = float(np.corrcoef(chroma_mean, rotated_major)[0, 1])
-        minor_corr = float(np.corrcoef(chroma_mean, rotated_minor)[0, 1])
-        features["mode"] = "major" if major_corr > minor_corr else "minor"
-        features["mode_confidence"] = float(abs(major_corr - minor_corr))
-        log(f"Key: {features['key']} {features['mode']} (confidence {features['mode_confidence']:.3f})")
-    except Exception as e:
-        log(f"Key/mode detection failed: {e}")
-        features["key"] = None
-        features["mode"] = None
-        features["key_error"] = str(e)
+    # Key and mode detection
+    # NOTE: chroma_cqt and chroma_stft both segfault in this environment
+    # (scipy BLAS/OpenBLAS conflict on arm64 Mac Mini). Disabled until resolved.
+    # The key/mode columns remain NULL for now; emotion graph uses BPM/energy/valence.
+    features["key"] = None
+    features["mode"] = None
+    log("Key/mode detection skipped (chroma disabled on this platform)")
     
     # Spectral features
     try:
