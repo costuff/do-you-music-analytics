@@ -39,6 +39,7 @@ type mockTrackStore struct {
 	setTrackLabelFunc            func(ctx context.Context, trackID int64, labelPath []string, curatedBy, notes string) (*db.TrackLabel, error)
 	getLabelsByPathFunc          func(ctx context.Context, path []string) ([]db.TrackLabel, error)
 	autoLabelTrackFunc           func(ctx context.Context, trackID int64) (*db.TrackLabel, error)
+	autoLabelAllFunc             func(ctx context.Context) (int, error)
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -152,6 +153,12 @@ func (m *mockTrackStore) AutoLabelTrack(ctx context.Context, trackID int64) (*db
 		return m.autoLabelTrackFunc(ctx, trackID)
 	}
 	return &db.TrackLabel{TrackID: trackID, AutoLabelPath: []string{"serenity"}}, nil
+}
+func (m *mockTrackStore) AutoLabelAll(ctx context.Context) (int, error) {
+	if m.autoLabelAllFunc != nil {
+		return m.autoLabelAllFunc(ctx)
+	}
+	return 0, nil
 }
 
 func newTestHandlers(store TrackStore) *Handlers {
@@ -1396,5 +1403,64 @@ func TestReanalyzeTracksHandler_DBError(t *testing.T) {
 	h.ReanalyzeTracksHandler(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// ---- AutoLabelAllHandler ----
+
+func TestAutoLabelAllHandler_ReturnsAccepted(t *testing.T) {
+	called := false
+	store := &mockTrackStore{
+		autoLabelAllFunc: func(_ context.Context) (int, error) {
+			called = true
+			return 42, nil
+		},
+	}
+	h := newTestHandlers(store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/labels/auto-label-all", nil)
+	w := httptest.NewRecorder()
+	h.AutoLabelAllHandler(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected 202 Accepted, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "running" {
+		t.Errorf("status = %v, want running", resp["status"])
+	}
+	// The handler launches a goroutine — give it brief time to execute
+	time.Sleep(20 * time.Millisecond)
+	if !called {
+		t.Error("expected AutoLabelAll to be called in background goroutine")
+	}
+}
+
+func TestAutoLabelAllHandler_WrongMethod(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/labels/auto-label-all", nil)
+	w := httptest.NewRecorder()
+	h.AutoLabelAllHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 MethodNotAllowed, got %d", w.Code)
+	}
+}
+
+func TestAutoLabelAllHandler_BackgroundError_StillReturns202(t *testing.T) {
+	store := &mockTrackStore{
+		autoLabelAllFunc: func(_ context.Context) (int, error) {
+			return 0, errors.New("simulated DB error")
+		},
+	}
+	h := newTestHandlers(store)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/labels/auto-label-all", nil)
+	w := httptest.NewRecorder()
+	h.AutoLabelAllHandler(w, req)
+
+	// Must still return 202 — error happens async in goroutine
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected 202 even when background goroutine will error, got %d", w.Code)
 	}
 }
