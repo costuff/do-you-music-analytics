@@ -1,370 +1,135 @@
 # DoYou Music Analytics
 
-**Automated audio analysis service for DoYou World Radio track collection**
+Companion analytics service for [DoYou World Radio Scraper](https://github.com/costuff/doyou-world-scraper). It discovers MP3 files in a shared library, extracts audio features, persists processing state/results in PostgreSQL, and exposes REST APIs consumed by the scraper dashboard.
 
-Companion service to [doyou-world-scraper](https://github.com/costuff/doyou-world-scraper) for continuous audio analysis of 9,875+ tracks using librosa.
+Collection size and throughput depend on the mounted library and deployment configuration; this README makes no scale, availability, or performance claims.
 
 ## Documentation
 
-- [Deployment Guide](docs/DEPLOYMENT.md)
-- [Dual-Repo Development](docs/DUAL_REPO_DEVELOPMENT.md)
-- [Testing Guide](docs/TESTING.md)
-- [Scraper Integration](docs/SCRAPER_INTEGRATION.md)
-- [Database Usage](docs/DATABASE_USAGE.md)
-- [Pre-Push Checklist](docs/PREPUSH_CHECKLIST.md)
-- [Roadmap / TODO](docs/TODO.md)
+- [Architecture and design decisions](docs/ARCHITECTURE.md)
+- [Development and validation guide](docs/DEVELOPMENT.md)
+- [API reference](docs/API_USAGE.md)
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Database usage](docs/DATABASE_USAGE.md)
+- [Dual-repository workflow](docs/DUAL_REPO_DEVELOPMENT.md)
+- [Roadmap and next steps](docs/TODO.md)
 
----
+## Architecture and data flow
 
-## Overview
+The scraper owns playlist collection and downloading. This repository owns analytics discovery, per-track processing state, audio features, derived emotion values, similarity data, and the analytics API. The services communicate through a shared music-library mount and HTTP contracts; they do not share application code. Production Compose mounts the music library read-only in the analytics service.
 
-This service automatically:
-- 🔍 **Scans NAS** for new MP3 files every 30 minutes
-- 📊 **Analyzes audio** with Python librosa (13 features: BPM, key, energy, etc.)
-- 💾 **Stores results** in PostgreSQL for querying
-- 🔄 **Runs continuously** with 6 parallel workers optimized for M2 Mac
-- 📡 **Exposes REST API** for statistics and track queries
+The worker uses PostgreSQL transactions and `FOR UPDATE SKIP LOCKED` to coordinate concurrent claims. Python/librosa runs as a bounded Go-managed subprocess. Persisted attempts, retry eligibility timestamps, and analysis leases allow failed or abandoned work to be retried after process interruption. This is database-coordinated polling, not a broker-backed queue.
 
-## Architecture
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the Mermaid system diagram, failure behavior, and trade-offs.
 
-This service is part of a microservices architecture:
+## Implemented capabilities
 
-- **Scraper Service** (Mac mini/Raspberry Pi): Downloads tracks, saves to NAS
-- **Analytics Service** (This repo, Mac mini): Scans NAS, analyzes tracks, stores features
-- **Shared PostgreSQL**: Central database for tracks and audio features
-- **Shared NAS**: Both services access `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks/`
+- Scheduled MP3 library discovery and PostgreSQL-backed track status.
+- Configurable concurrent Go worker pool and analyzer timeout.
+- Python/librosa extraction, raw spectral/RMS/ZCR/MFCC fields, normalized heuristic audio features, deterministic emotion dimensions, and cosine-similarity results.
+- Bounded exponential retries, persisted attempt counts, stale-claim recovery, and graceful interruption handling.
+- Missing-file reconciliation and requeue when a previously missing path reappears.
+- REST APIs for readiness, statistics, track browsing/search, emotions, and precomputed similar tracks.
+- Request IDs, structured request logs, and Prometheus-format HTTP request metrics at `/metrics`.
+- Independently built Docker API/worker images and GitHub Actions quality/build workflows.
 
-See [docs/ANALYTICS_ARCHITECTURE.md](docs/ANALYTICS_ARCHITECTURE.md) for detailed design.
+Feature scores are heuristics, not Spotify-provided measurements or outputs from a trained ML model. Similarity is cosine similarity over deterministic emotion vectors, not embedding search. Musical key/mode fields are currently left unset by the analyzer because chroma estimation is disabled. See [Audio Analysis Scope and Limitations](docs/ARCHITECTURE.md#known-limitations).
 
----
+## Quick start
 
-## Features
+### Requirements
 
-- ✅ **Automatic NAS scanning** - Detects new tracks every 30 minutes
-- ✅ **Continuous processing** - 6 parallel workers, never stops
-- ✅ **Missing file cleanup** - Automatically detects and handles deleted files (enabled by default, mark mode)
-- ✅ **13 audio features** - BPM, key, energy, danceability, valence, acousticness, instrumentalness, speechiness, liveness, melodicness, loudness, duration, mode
-- ✅ **REST API** - Query statistics and analyzed tracks
-- ✅ **PostgreSQL storage** - Atomic operations, no race conditions
-- ✅ **Docker deployment** - GitHub Actions → GHCR → Watchtower auto-updates
-- ✅ **Comprehensive tests** - 99 tests covering JSON, scanner, paths, Docker, cleanup
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Go 1.25+
-- Python 3.11+ with librosa 0.10+
+- Go 1.25.7 (as specified in `go.mod`)
+- Python 3.11 and dependencies from `scripts/requirements.txt`
 - PostgreSQL 16+
-- NAS mount (Mac: `/Volumes/ExtHDD-8TB/Music/...` or Docker: `/mnt/music/downloads`)
-- ffmpeg for audio decoding
+- ffmpeg and a readable music directory for real audio processing
 
-### 1. Install Dependencies
+### Local setup
 
-```bash
-# Go dependencies
-go mod download
+1. Install Go/Python dependencies and start a **development/test** PostgreSQL database.
+2. Set `DATABASE_URL`, `NAS_MOUNT_PATH`, `PYTHON_PATH`, and `ANALYSIS_SCRIPT`; use an isolated database for tests.
+3. Apply migrations with `go run ./cmd/migrate up`.
+4. Start the API with `go run ./cmd/api` and the worker with `go run ./cmd/worker` in separate terminals.
+5. Check `GET /health`, `GET /api/v1/stats`, and `GET /metrics` on the API address (default `http://localhost:8080`).
 
-# Python dependencies
-pip install -r scripts/requirements.txt
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-### 3. Run Database Migrations
-
-```bash
-go run ./cmd/migrate up
-```
-
-### 4. Start Worker (Runs Continuously)
-
-```bash
-go run ./cmd/worker
-# Worker will:
-# 1. Scan NAS for new tracks immediately
-# 2. Start analyzing pending tracks with 6 parallel workers
-# 3. Re-scan every 30 minutes for new tracks
-# 4. Run until stopped with Ctrl+C
-```
-
-### 5. Start API (Optional, for monitoring)
-
-```bash
-go run ./cmd/api
-# API runs on http://localhost:8080
-```
-
----
+The API also applies embedded migrations at startup. Do not mount migration `.up.sql` and `.down.sql` files into Postgres `/docker-entrypoint-initdb.d`; the embedded API migration runner owns upgrades. For production deployment/secrets, follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), not the local quick start.
 
 ## Configuration
 
-See [.env.example](.env.example) for all configuration options.
+See [.env.example](.env.example). Key settings include:
 
-**Key settings:**
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | local development URL | PostgreSQL connection |
+| `NAS_MOUNT_PATH` | `/mnt/music/downloads` | Readable music directory |
+| `MAX_WORKERS` | `6` | Concurrent analysis workers (container deployment may override) |
+| `SCAN_INTERVAL` | `30m` | Library discovery cadence |
+| `ANALYSIS_TIMEOUT` | `300s` | Maximum duration per analyzer subprocess |
+| `MAX_ANALYSIS_ATTEMPTS` | `5` | Attempts before a track remains failed |
+| `RETRY_BASE_DELAY` | `30s` | Exponential retry delay base, capped at 64x |
+| `ANALYSIS_LEASE_TIMEOUT` | `10m` | Stale claim recovery; must exceed analysis timeout |
+| `ENABLE_CLEANUP` | `true` | Reconcile tracks whose files disappeared |
+| `CLEANUP_ACTION` | `mark` | `mark` preserves DB history; `delete` removes rows |
+| `CLEANUP_INTERVAL` | `24h` | Cleanup cadence (production Compose may override, e.g. `10m`) |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated browser origin allowlist |
 
-- `DATABASE_URL`: PostgreSQL connection string
-- `NAS_MOUNT_PATH`: Path to NAS directory with MP3 files
-  - Mac: `/Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks`
-  - Docker: `/mnt/music/downloads`
-- `MAX_WORKERS`: Number of parallel workers (default: 6, optimal for M2 Mac)
-- `SCAN_INTERVAL`: Automatic scan frequency (default: 30m)
-- `ENABLE_CLEANUP`: Enable automatic cleanup of missing files (default: false)
-- `CLEANUP_ACTION`: How to handle missing files - "mark" or "delete" (default: mark)
-- `CLEANUP_INTERVAL`: Cleanup frequency (default: 10m)
-- `PYTHON_PATH`: Python 3.11+ executable path
-- `ANALYSIS_SCRIPT`: Path to analyze_audio.py
+CORS is not authentication. Restrict network/tunnel access appropriately; API user authentication is not implemented.
 
----
+## API surface
 
-## API Endpoints
+- `GET /health` — database readiness and service version.
+- `GET /metrics` — Prometheus text-format request counters, cumulative duration, and in-flight requests.
+- `GET /api/v1/stats` and `/api/v1/stats/detailed` — processing counts and duration/rate summaries.
+- `GET /api/v1/tracks`, `/api/v1/tracks/{id}`, `/api/v1/tracks/search`, `/api/v1/tracks/failed` — paginated/list/detail/search endpoints.
+- `GET /api/v1/emotions`, `/api/v1/emotions/distribution`, `/api/v1/tracks/{id}/emotions` — derived emotion data.
+- `GET /api/v1/tracks/{id}/similar?n=10`, `POST /api/v1/similarity/recompute`, `GET /api/v1/similarity/stats` — precomputed similarity endpoints.
 
-### Statistics
-- `GET /health` - Health check
-- `GET /api/v1/stats` - Track counts by status (total, pending, analyzing, completed, failed)
-- `GET /api/v1/stats/detailed` - Stats + processing metrics (avg time, tracks/hour, completion %)
+The detailed request/response contract and examples are in [docs/API_USAGE.md](docs/API_USAGE.md).
 
-### Tracks
-- `GET /api/v1/tracks?limit=50&offset=0&status=completed` - List tracks (paginated)
-- `GET /api/v1/tracks/:id` - Get single track with audio features
-- `GET /api/v1/tracks/search?q=artist+name` - Search by title/artist/album
-- `GET /api/v1/tracks/failed?limit=50` - Get failed tracks with error messages
+## Testing, coverage, and build validation
 
-See [docs/API_USAGE.md](docs/API_USAGE.md) for detailed usage examples and Node.js integration code.
+```sh
+# Formatting, static analysis, tests, and build
+# gofmt -l should print no modified Go source files
+gofmt -l $(git diff --name-only -- '*.go')
+go vet ./...
+go test -count=1 ./...
+go build ./...
 
----
+# Audio feature tests (install requirements first)
+python -m unittest scripts.test_formulas
 
-## Automatic Cleanup
-
-The worker can automatically detect and handle files that no longer exist on the filesystem (e.g., deleted corrupted files).
-
-**Configuration:**
-```bash
-ENABLE_CLEANUP=true           # Enable cleanup (default: true)
-CLEANUP_ACTION=mark           # "mark" or "delete" (default: mark)
-CLEANUP_INTERVAL=10m          # How often to check (default: 10m)
-```
-
-**Cleanup Actions:**
-- **`mark`** (recommended, default): Sets `analysis_status='missing'` and adds error message. Preserves history for reference.
-- **`delete`**: Permanently removes track records from database. Use with caution.
-
-**Default Behavior:**
-- Enabled by default with "mark" action (safe, preserves history)
-- First cleanup runs 5 minutes after worker starts
-- Subsequent cleanups run on the configured interval
-- Logs all cleanup operations (marked/deleted counts)
-
-This ensures statistics remain accurate when files are manually deleted from the NAS.
-
----
-
-## Development
-
-### Project Structure
-
-```
-doyou-music-analytics/
-├── cmd/
-│   ├── worker/           # Background worker
-│   ├── api/              # REST API server
-│   └── migrate/          # Database migrations
-├── internal/
-│   ├── analyzer/         # Audio analysis logic
-│   ├── db/               # Database operations
-│   ├── storage/          # File system operations
-│   ├── config/           # Configuration
-│   └── api/              # HTTP handlers
-├── pkg/
-│   └── logger/           # Structured logging
-├── scripts/
-│   ├── analyze_audio.py  # Python librosa wrapper
-│   └── requirements.txt
-├── migrations/           # SQL migrations
-├── deployments/
-│   └── docker/
-└── docs/
-```
-
-### Running Tests
-
-```bash
-# Run all tests (99 tests)
-go test ./...
-
-# Run with coverage
-go test ./... -cover
-
-# Run specific package
-go test ./internal/db -v
-
-# Count tests
-go test ./... -v 2>&1 | grep "^=== RUN" | wc -l
-```
-
-### Database Migrations
-
-```bash
-# Apply migrations
-go run ./cmd/migrate up
-
-# Check status
-go run ./cmd/migrate status
-
-# Rollback
-go run ./cmd/migrate down
-```
-
----
-
-## Deployment
-
-### Production (Mac mini with Watchtower)
-
-```bash
-# Use production compose file with auto-updates
-docker-compose -f docker-compose.prod.yml up -d
-
-# Watchtower polls GitHub Container Registry every 5 minutes
-# Any push to main triggers: GitHub Actions → Build → Push → Auto-deploy
-```
-
-### Local Development
-
-```bash
-# Test Docker builds locally before pushing
+# Local image builds
 docker build -f deployments/docker/Dockerfile.api -t doyou-analytics-api:local .
 docker build -f deployments/docker/Dockerfile.worker -t doyou-analytics-worker:local .
-docker-compose up
 ```
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for complete production setup guide with pre-push testing checklist.
+DB integration tests require a **fresh isolated PostgreSQL database** with migrations applied; they create/delete test rows and run missing-file cleanup. Never point them at a production database. To include them in a coverage run:
 
----
-
-## Database Schema
-
-### `tracks` table
-- Track metadata (file_path, file_name, artist, title, album, etc.)
-- Analysis status: `pending`, `analyzing`, `completed`, `failed`
-- Timestamps: `downloaded_at`, `analyzed_at`
-- Error tracking: `analysis_error` field
-
-### `audio_features` table
-- 13 audio features with `track_id` foreign key
-- All feature fields are nullable (*float64, *string) for NULL support
-- JSON tags for snake_case API responses
-- Analysis version tracking
-
-See [docs/DATABASE_USAGE.md](docs/DATABASE_USAGE.md) for schema details, SQL examples, and integration patterns.
-
----
-
-## Audio Features (13 Total)
-
-Extracted using librosa v0.10+ and custom algorithms:
-
-**Tempo/Rhythm:**
-- **BPM**: Beats per minute (float, typically 60-200)
-- **Duration**: Track length in seconds
-
-**Tonality:**
-- **Key**: Musical key (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
-- **Mode**: Major or Minor
-
-**Energy/Mood:**
-- **Energy**: Perceived intensity (0.0-1.0)
-- **Danceability**: Rhythmic stability (0.0-1.0)
-- **Valence**: Musical positivity (0.0-1.0)
-- **Acousticness**: Acoustic vs electronic (0.0-1.0)
-
-**Vocals:**
-- **Instrumentalness**: Higher = less vocals (0.0-1.0)
-- **Speechiness**: Spoken word presence (0.0-1.0)
-- **Liveness**: Live audience presence (0.0-1.0)
-
-**Melodic:**
-- **Melodicness**: Melodic clarity (0.0-1.0)
-
-**Dynamics:**
-- **Loudness**: Track loudness in dB (typically -20 to 0)
-
----
-
-## Monitoring
-
-### API Statistics
-```bash
-# Get current stats
-curl http://localhost:8080/api/v1/stats
-
-# Get detailed stats with processing metrics
-curl http://localhost:8080/api/v1/stats/detailed
+```sh
+go run ./cmd/migrate up
+DATABASE_URL=postgresql://user:password@localhost:5432/doyou_test go test -count=1 -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out
 ```
 
-### Docker Logs
-```bash
-# Watch worker logs
-docker-compose logs -f worker
+### Verified local baseline (2026-10-01)
 
-# Check last 100 lines
-docker-compose logs --tail=100 worker
-```
+- All Go packages passed `go test -count=1 ./...`, including DB integration tests against a fresh disposable PostgreSQL 16 instance with all seven migrations applied; `go vet ./...`, formatting, and `go build ./...` passed.
+- Full-module Go statement coverage with DB tests enabled: **36.3%**. Core `internal/analyzer`, `internal/api`, `internal/config`, and `internal/db` packages together: **56.6%**; per package: analyzer **100.0%**, API **96.9%**, config **85.4%**, DB **32.5%**.
+- Python audio formula/synthetic-audio suite: **31 tests passed** using dependencies in the worker image.
+- Scraper companion frontend: **84 tests passed**, ESLint and production build passed. Scraper backend package coverage: **75.3%** total, including its command entrypoint at 0%; see the scraper README for package-level detail.
+- Both production Compose files validated. All four API/worker/frontend images built locally. A disposable analytics API/database smoke test verified migration-on-startup, readiness, stats, metrics, version output, and subresource routing.
 
-### Database Queries
-```sql
--- Check progress
-SELECT analysis_status, COUNT(*) FROM tracks GROUP BY analysis_status;
+These are local verification results, not evidence of a production release, NAS-wide processing run, user load, or uptime. Docker images were not pushed and production services were not changed.
 
--- Get recently analyzed tracks
-SELECT file_name, analyzed_at FROM tracks 
-WHERE analysis_status = 'completed' 
-ORDER BY analyzed_at DESC LIMIT 10;
-```
+## Next steps
 
----
+1. Improve analytics DB coverage with isolated per-test fixtures; test transactionality across feature/emotion persistence and retry/recovery edge cases.
+2. Add content-hash/mtime identity so replaced files are detected and safely reanalyzed.
+3. Export worker throughput, retries, stale-claim recovery, and queue-wait metrics; build operational dashboards/alerts.
+4. Improve similarity-refresh consistency and benchmark the current quadratic algorithm before adopting vector search.
+5. Add bounded export/reanalysis APIs and contract tests for pagination, errors, and scraper compatibility.
+6. Add API authentication or enforce deployment access restrictions before broader exposure.
+7. Validate upgrade/rollback behavior on a copy of the actual deployment schema and coordinate a deliberate production rollout.
 
-## Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing`)
-5. Open Pull Request
-
----
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details
-
----
-
-## Documentation
-
-- [docs/API_USAGE.md](docs/API_USAGE.md) - API integration guide with Node.js examples
-- [docs/DATABASE_USAGE.md](docs/DATABASE_USAGE.md) - Database schema and query examples
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) - Production deployment guide
-- [docs/ANALYTICS_ARCHITECTURE.md](docs/ANALYTICS_ARCHITECTURE.md) - System architecture details
-- [docs/TESTING.md](docs/TESTING.md) - Testing guide and TDD workflow
-
-## Related Projects
-
-- [doyou-world-scraper](https://github.com/costuff/doyou-world-scraper) - Track scraper and downloader
-
----
-
-## Version
-
-Current version: **0.6.0**
-
-See [VERSION](VERSION) file and git tags for version history.
-
-**Version Management:** Always increment VERSION file before committing (PATCH for bugs, MINOR for features, MAJOR for breaking changes).
+The detailed ordered backlog lives in [docs/TODO.md](docs/TODO.md).

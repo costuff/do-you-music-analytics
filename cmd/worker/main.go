@@ -47,6 +47,31 @@ func main() {
 
 	log.Info("✅ Connected to PostgreSQL")
 
+	retryBaseDelay, err := time.ParseDuration(cfg.RetryBaseDelay)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Invalid retry base delay: %v", err))
+	}
+	leaseTimeout, err := time.ParseDuration(cfg.AnalysisLeaseTimeout)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Invalid analysis lease timeout: %v", err))
+	}
+	recovered, err := database.RecoverStaleAnalysis(ctx, leaseTimeout, cfg.MaxAnalysisAttempts, retryBaseDelay)
+	if err != nil {
+		log.Fatal(fmt.Sprintf("Failed to recover stale analysis claims: %v", err))
+	}
+	log.Info(fmt.Sprintf("Recovered %d stale analysis claims", recovered))
+
+	recordFailure := func(trackID int, cause error) {
+		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		status, err := database.ScheduleTrackRetry(persistCtx, trackID, cfg.MaxAnalysisAttempts, retryBaseDelay, cause.Error())
+		if err != nil {
+			log.Error(fmt.Sprintf("Failed to persist retry state for track %d: %v", trackID, err))
+			return
+		}
+		log.Warn(fmt.Sprintf("Track %d processing attempt failed; status=%s: %v", trackID, status, cause))
+	}
+
 	// Initialize analyzer
 	analyzerTimeout, err := time.ParseDuration(cfg.AnalysisTimeout)
 	if err != nil {
@@ -95,6 +120,32 @@ func main() {
 	var processed, failed atomic.Int64
 	startTime := time.Now()
 
+	// Reap expired claims periodically, not only at process startup. This also
+	// handles restarts that happen before the stale lease has elapsed.
+	recoveryInterval := leaseTimeout / 2
+	if recoveryInterval < 10*time.Second {
+		recoveryInterval = 10 * time.Second
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(recoveryInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-shutdownCtx.Done():
+				return
+			case <-ticker.C:
+				n, err := database.RecoverStaleAnalysis(shutdownCtx, leaseTimeout, cfg.MaxAnalysisAttempts, retryBaseDelay)
+				if err != nil {
+					log.Error(fmt.Sprintf("Failed to recover stale analysis claims: %v", err))
+				} else if n > 0 {
+					log.Warn(fmt.Sprintf("Recovered %d stale analysis claims", n))
+				}
+			}
+		}
+	}()
+
 	// Start periodic cleanup if enabled
 	if cfg.EnableCleanup {
 		cleanupInterval, err := time.ParseDuration(cfg.CleanupInterval)
@@ -109,8 +160,12 @@ func main() {
 			cleanupTicker := time.NewTicker(cleanupInterval)
 			defer cleanupTicker.Stop()
 
-			// Run initial cleanup after 5 minutes
-			time.Sleep(5 * time.Minute)
+			// Run initial cleanup after 5 minutes, but do not delay shutdown.
+			select {
+			case <-shutdownCtx.Done():
+				return
+			case <-time.After(5 * time.Minute):
+			}
 			log.Info("🧹 Running initial cleanup check...")
 			stats, err := database.CleanupMissingTracks(shutdownCtx, cfg.NASMountPath, cfg.CleanupAction)
 			if err != nil {
@@ -202,7 +257,11 @@ func main() {
 
 		// Wait 10 minutes after startup before first run to let the main workers
 		// build up a batch of emotion records first.
-		time.Sleep(10 * time.Minute)
+		select {
+		case <-shutdownCtx.Done():
+			return
+		case <-time.After(10 * time.Minute):
+		}
 
 		runSimilarity := func() {
 			n, err := database.ComputeSimilarity(shutdownCtx, 20)
@@ -282,13 +341,21 @@ func main() {
 				track, err := database.ClaimPendingTrack(shutdownCtx)
 				if err != nil {
 					log.Error(fmt.Sprintf("Worker %d: Failed to claim pending track: %v", workerID, err))
-					time.Sleep(5 * time.Second)
+					select {
+					case <-shutdownCtx.Done():
+						return
+					case <-time.After(5 * time.Second):
+					}
 					continue
 				}
 
 				if track == nil {
 					// No pending tracks, sleep briefly and try again
-					time.Sleep(10 * time.Second)
+					select {
+					case <-shutdownCtx.Done():
+						return
+					case <-time.After(10 * time.Second):
+					}
 					continue
 				}
 
@@ -305,9 +372,15 @@ func main() {
 
 				features, err := anlz.AnalyzeFile(shutdownCtx, filePath)
 				if err != nil {
-					errMsg := err.Error()
-					log.Error(fmt.Sprintf("Worker %d: Analysis failed for %s: %v", workerID, track.FilePath, err))
-					_ = database.UpdateTrackStatus(shutdownCtx, track.ID, "failed", &errMsg)
+					if shutdownCtx.Err() != nil {
+						persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						if releaseErr := database.ReleaseAnalysisClaim(persistCtx, track.ID); releaseErr != nil {
+							log.Error(fmt.Sprintf("Worker %d: Failed to release interrupted claim for track %d: %v", workerID, track.ID, releaseErr))
+						}
+						cancel()
+						continue
+					}
+					recordFailure(track.ID, fmt.Errorf("analysis failed for %s: %w", track.FilePath, err))
 					failed.Add(1)
 					consecutiveFailures++
 					if consecutiveFailures >= 3 {
@@ -377,9 +450,7 @@ func main() {
 
 				// Save features to database
 				if err := database.SaveAudioFeatures(shutdownCtx, dbFeatures); err != nil {
-					errMsg := fmt.Sprintf("Failed to save features: %v", err)
-					log.Error(fmt.Sprintf("Worker %d: %s", workerID, errMsg))
-					_ = database.UpdateTrackStatus(shutdownCtx, track.ID, "failed", &errMsg)
+					recordFailure(track.ID, fmt.Errorf("save audio features: %w", err))
 					failed.Add(1)
 					continue
 				}
@@ -406,6 +477,13 @@ func main() {
 				// Update status to completed
 				if err := database.UpdateTrackStatus(shutdownCtx, track.ID, "completed", nil); err != nil {
 					log.Error(fmt.Sprintf("Worker %d: Failed to update completion status: %v", workerID, err))
+					if shutdownCtx.Err() != nil {
+						persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						if releaseErr := database.ReleaseAnalysisClaim(persistCtx, track.ID); releaseErr != nil {
+							log.Error(fmt.Sprintf("Worker %d: Failed to release interrupted claim for track %d: %v", workerID, track.ID, releaseErr))
+						}
+						cancel()
+					}
 					continue
 				}
 

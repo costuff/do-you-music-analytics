@@ -15,6 +15,8 @@ curl http://localhost:8080/api/v1/stats
 ```
 
 **Response:**
+
+Example shape only; counts and timings below are illustrative, not live project metrics.
 ```json
 {
   "total": 9875,
@@ -188,7 +190,7 @@ async function getStatsWithRetry(maxRetries = 3) {
 
 ## CORS
 
-The API has CORS enabled, so you can call it directly from browser-based applications:
+The API allows browser origins listed in `CORS_ORIGINS` (comma-separated). CORS is not authentication; use network or tunnel access controls for private deployments. The analytics host-published API port binds to localhost by default.
 
 ```javascript
 // In your React/Vue/etc. dashboard
@@ -205,6 +207,18 @@ useEffect(() => {
   return () => clearInterval(interval);
 }, []);
 ```
+
+## Similarity
+
+- `GET /api/v1/tracks/{id}/similar?n=10` returns up to 100 precomputed neighbors (default 10).
+- `POST /api/v1/similarity/recompute` starts a recomputation; a request while one is running receives `409`.
+- `GET /api/v1/similarity/stats` reports stored pair counts and recomputation status.
+
+## Operations
+
+- `GET /health` verifies PostgreSQL connectivity and returns `503` when it is unavailable.
+- `GET /metrics` exposes Prometheus text-format request counters, cumulative duration, and in-flight request count.
+- Responses include `X-Request-ID`; structured API request logs include the same correlation value.
 
 ## Testing the Endpoint
 

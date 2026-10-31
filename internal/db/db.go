@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -80,16 +81,6 @@ func (db *DB) RunMigrations(ctx context.Context, migrationsFS embed.FS) error {
 	for _, filename := range files {
 		version := strings.TrimSuffix(filename, ".up.sql")
 
-		var exists bool
-		if err := db.pool.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version,
-		).Scan(&exists); err != nil {
-			return fmt.Errorf("check migration %s: %w", version, err)
-		}
-		if exists {
-			continue
-		}
-
 		sql, err := migrationsFS.ReadFile(filename)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", filename, err)
@@ -98,6 +89,40 @@ func (db *DB) RunMigrations(ctx context.Context, migrationsFS embed.FS) error {
 		tx, err := db.pool.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin tx for %s: %w", version, err)
+		}
+		// Serialize migration runners and re-check inside the transaction so concurrent API
+		// instances cannot both execute the same non-idempotent DDL.
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(78423957241001)"); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("lock migration runner for %s: %w", version, err)
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version,
+		).Scan(&exists); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("check migration %s: %w", version, err)
+		}
+		if exists {
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit migration lock %s: %w", version, err)
+			}
+			continue
+		}
+		legacySchema, err := legacyMigrationPresent(ctx, tx, version)
+		if err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("inspect legacy schema for %s: %w", version, err)
+		}
+		if legacySchema {
+			if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+				tx.Rollback(ctx)
+				return fmt.Errorf("adopt legacy migration %s: %w", version, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit legacy migration %s: %w", version, err)
+			}
+			continue
 		}
 		if _, err := tx.Exec(ctx, string(sql)); err != nil {
 			_ = tx.Rollback(ctx) //nolint:errcheck // rollback on error path
@@ -113,4 +138,33 @@ func (db *DB) RunMigrations(ctx context.Context, migrationsFS embed.FS) error {
 		applied++
 	}
 	return nil
+}
+
+// legacyMigrationPresent recognizes schema objects created by the historical
+// /docker-entrypoint-initdb.d bootstrap (which did not populate schema_migrations).
+func legacyMigrationPresent(ctx context.Context, tx pgx.Tx, version string) (bool, error) {
+	var query string
+	switch version {
+	case "001_initial_schema":
+		query = `SELECT to_regclass('public.tracks') IS NOT NULL AND to_regclass('public.audio_features') IS NOT NULL`
+	case "002_add_missing_status":
+		query = `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'tracks'::regclass AND conname = 'valid_analysis_status' AND pg_get_constraintdef(oid) LIKE '%missing%')`
+	case "003_add_raw_features":
+		query = `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='audio_features' AND column_name='mfcc_0_mean')`
+	case "004_add_emotions":
+		query = `SELECT to_regclass('public.track_emotions') IS NOT NULL`
+	case "005_add_similarity":
+		query = `SELECT to_regclass('public.track_similarity') IS NOT NULL`
+	case "008_analysis_retries":
+		query = `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tracks' AND column_name='analysis_attempts')`
+	case "009_analysis_duration":
+		query = `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tracks' AND column_name='analysis_duration_seconds')`
+	default:
+		return false, nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, query).Scan(&present); err != nil {
+		return false, err
+	}
+	return present, nil
 }

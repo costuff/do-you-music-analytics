@@ -1,6 +1,7 @@
 name: Build and Push Docker Images
 
 on:
+  pull_request:
   push:
     branches: [ main ]
     paths-ignore:
@@ -17,6 +18,23 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: doyou
+          POSTGRES_PASSWORD: validation-only
+          POSTGRES_DB: doyou_music
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U doyou -d doyou_music"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://doyou:validation-only@localhost:5432/doyou_music
+      VALIDATE_NAS_ON_STARTUP: "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,38 +42,45 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.7'
           cache: true
 
-      - name: Run unit tests
-        run: |
-          go test -v -count=1 \
-            ./internal/config \
-            ./internal/api \
-            ./internal/analyzer \
-            ./pkg/logger \
-            2>&1 | tee test-output.log
+      - name: Check formatting
+        run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
 
-      - name: Test summary
+      - name: Vet
+        run: go vet ./...
+
+      - name: Apply database migrations
+        run: go run ./cmd/migrate up
+
+      - name: Run all Go tests
+        run: go test -count=1 -coverprofile=coverage.out ./...
+
+      - name: Publish Go coverage summary
         if: always()
         run: |
-          echo "### 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if grep -q "FAIL" test-output.log; then
-            echo "❌ Tests failed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ All tests passed" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Packages tested:**" >> $GITHUB_STEP_SUMMARY
-            echo "- Config: 11 tests" >> $GITHUB_STEP_SUMMARY
-            echo "- API: 30 tests" >> $GITHUB_STEP_SUMMARY
-            echo "- Analyzer: 1 test" >> $GITHUB_STEP_SUMMARY
-            echo "- Logger: 4 tests" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage.out ]; then
+            go tool cover -func=coverage.out | tail -n 1 | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install audio-analysis dependencies
+        run: python -m pip install -r scripts/requirements.txt
+
+      - name: Test audio feature pipeline
+        run: python -m unittest scripts.test_formulas
 
   build-and-push:
     name: Build and Push
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,3 +159,29 @@ jobs:
           echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+
+  validate-images:
+    name: Validate Docker Images
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build worker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployments/docker/Dockerfile.worker
+          push: false
+
+      - name: Build API image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployments/docker/Dockerfile.api
+          push: false

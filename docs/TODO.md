@@ -1,11 +1,11 @@
 # DoYou Music Analytics TODO
 
-Active roadmap for the analytics service, synchronized with the scraper integration state as of 2026-03-16.
+Active roadmap for the analytics service. Deployment/feature notes below reflect repository status reviewed on 2026-10-01; production rollout still requires operator verification.
 
 ## Remaining Steps (Immediate)
 
-- [ ] **Deploy v0.6.0 to production** — Watchtower will pull the new image; then apply migration 003 manually: `docker exec -it doyou-analytics-db psql -U doyou -d doyou_music -f /migrations/003_add_raw_features.up.sql`; then reset all `analysis_version = '1.0.0'` tracks to `pending` so they get re-analyzed with MFCCs + mode + accurate loudness_db
-- [x] **Fix/validate high-level feature formulas** — danceability now uses beat-regularity (CoV of onset strength); valence incorporates mode shift; acousticness uses spectral flatness; instrumentalness uses MFCC-1 std
+- [ ] **Deploy current release and verify production upgrade** — Current repository version is 0.10.0. Embedded migrations 001–007 are applied by the API at startup; test upgrade on a production-schema copy, then follow the operator rollout/rollback checklist. Do not replay migration 003 manually.
+- [x] **Fix/validate heuristic feature formulas** — danceability uses beat regularity; acousticness uses spectral flatness; instrumentalness uses MFCC variation. Scores are deterministic heuristics, not trained ML predictions.
 - [x] **Add emotion layer** — `track_emotions` table (migration 004); 8 dimensions computed deterministically in worker after each track; `GET /api/v1/tracks/:id/emotions` + bulk `GET /api/v1/emotions` + distribution endpoint
 - [x] **Compute similarity graph** — `track_similarity` table (migration 005); `ComputeSimilarity` finds top-20 neighbours per track via cosine similarity in emotion space; worker recomputes every 30 min; `GET /api/v1/tracks/:id/similar?n=10` + `POST /api/v1/similarity/recompute` + `GET /api/v1/similarity/stats`
 - [ ] **Redesign EmotionGraph as a hierarchical spatial map** — replace the compass-rose of floating orbs with emotion *regions/territories* on a 2D canvas; drilling into a region reveals progressively finer sub-clusters each layer adding one more feature dimension (e.g. melancholy → sadness → winter blues → rain); breadcrumb navigation to move between levels
@@ -95,7 +95,7 @@ Active roadmap for the analytics service, synchronized with the scraper integrat
 - [x] **Auto-migration at API startup (v0.9.0)** — SQL files embedded via `//go:embed`; `RunMigrations` applies all pending `.up.sql` in sorted order at startup; eliminates manual migration steps
 
 - [x] **Persisted raw audio features (v0.6.0, 2026-03-19)** — MFCCs (0–12 mean+std), spectral centroid/rolloff, ZCR, RMS energy were computed by librosa but silently discarded; migration 003 adds columns, `analyze_audio.py` now outputs them, `features.go` saves all 32 new fields
-- [x] **Mode detection (v0.6.0, 2026-03-19)** — Added Krumhansl-Kessler tonal hierarchy profiles to `analyze_audio.py`; mode (major/minor) and mode_confidence now computed and saved; `audio_features.mode` column was always there but never written to
+- [ ] **Key/mode detection** — historical Krumhansl-Kessler implementation is currently disabled; the analyzer emits null key/mode. Re-enable only with representative audio tests and document confidence/limitations.
 - [x] **Loudness dBFS (v0.6.0, 2026-03-19)** — `loudness_db` now computed from RMS mean (20·log₁₀); was in DB schema and Go struct but Python never emitted it
 
 - [x] **Fixed `CleanupMissingTracks` bug (2026-03-16)** — nested `os.IsNotExist` AND logic silently skipped all missing tracks; replaced with `fileExists` flag that only requires the primary `fullPath` stat to succeed

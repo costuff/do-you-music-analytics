@@ -8,7 +8,7 @@ This document provides everything you need to integrate the scraper with the ana
 
 ## 📊 Service Status
 
-**Current Version:** 0.6.0  
+**Current Version:** See the repository [VERSION](../VERSION) file.
 **Status:** ✅ Fully operational on Mac mini  
 **Tracks Imported:** 3,752  
 **Tracks Analyzed:** ~135 completed, ~2,500 pending  
@@ -290,7 +290,7 @@ curl http://localhost:8080/api/v1/tracks/failed?limit=20
 │                             ▼                          │
 │                    ┌────────────────┐                  │
 │                    │ NAS Storage    │                  │
-│                    │ 9,875 MP3s     │                  │
+│                    │ music library  │                  │
 │                    │ 65GB           │                  │
 │                    └────────────────┘                  │
 └─────────────────────────────────────────────────────────┘

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -18,12 +19,15 @@ type Config struct {
 	ShallowScan          bool // When true, only scan top-level dir (faster over SMB/network)
 
 	// Analysis
-	BatchSize       int
-	MaxWorkers      int
-	PythonPath      string
-	AnalysisScript  string
-	AnalysisTimeout string
-	ScanInterval    string // How often to scan for new tracks (e.g., "5m", "1h")
+	BatchSize            int
+	MaxWorkers           int
+	PythonPath           string
+	AnalysisScript       string
+	AnalysisTimeout      string
+	ScanInterval         string // How often to scan for new tracks (e.g., "5m", "1h")
+	MaxAnalysisAttempts  int
+	RetryBaseDelay       string
+	AnalysisLeaseTimeout string
 
 	// Cleanup
 	EnableCleanup   bool   // Enable automatic cleanup of missing files
@@ -53,12 +57,15 @@ func Load() (*Config, error) {
 		ShallowScan:          getEnvBool("SHALLOW_SCAN", false), // set true in dev over SMB/network
 
 		// Analysis
-		BatchSize:       getEnvInt("BATCH_SIZE", 10),
-		MaxWorkers:      getEnvInt("MAX_WORKERS", 6),
-		PythonPath:      getEnv("PYTHON_PATH", "/usr/bin/python3"),
-		AnalysisScript:  getEnv("ANALYSIS_SCRIPT", "./scripts/analyze_audio.py"),
-		AnalysisTimeout: getEnv("ANALYSIS_TIMEOUT", "300s"),
-		ScanInterval:    getEnv("SCAN_INTERVAL", "30m"),
+		BatchSize:            getEnvInt("BATCH_SIZE", 10),
+		MaxWorkers:           getEnvInt("MAX_WORKERS", 6),
+		PythonPath:           getEnv("PYTHON_PATH", "/usr/bin/python3"),
+		AnalysisScript:       getEnv("ANALYSIS_SCRIPT", "./scripts/analyze_audio.py"),
+		AnalysisTimeout:      getEnv("ANALYSIS_TIMEOUT", "300s"),
+		ScanInterval:         getEnv("SCAN_INTERVAL", "30m"),
+		MaxAnalysisAttempts:  getEnvInt("MAX_ANALYSIS_ATTEMPTS", 5),
+		RetryBaseDelay:       getEnv("RETRY_BASE_DELAY", "30s"),
+		AnalysisLeaseTimeout: getEnv("ANALYSIS_LEASE_TIMEOUT", "10m"),
 
 		// Cleanup
 		EnableCleanup:   getEnvBool("ENABLE_CLEANUP", true),
@@ -97,6 +104,22 @@ func (c *Config) Validate() error {
 
 	if c.MaxWorkers < 1 || c.MaxWorkers > 32 {
 		return fmt.Errorf("MAX_WORKERS must be between 1 and 32, got %d", c.MaxWorkers)
+	}
+	if c.MaxAnalysisAttempts < 0 || c.MaxAnalysisAttempts > 20 {
+		return fmt.Errorf("MAX_ANALYSIS_ATTEMPTS must be between 1 and 20, got %d", c.MaxAnalysisAttempts)
+	}
+	if d, err := time.ParseDuration(c.RetryBaseDelay); c.RetryBaseDelay != "" && (err != nil || d <= 0) {
+		return fmt.Errorf("RETRY_BASE_DELAY must be a positive duration, got %q", c.RetryBaseDelay)
+	}
+	if d, err := time.ParseDuration(c.AnalysisLeaseTimeout); c.AnalysisLeaseTimeout != "" && (err != nil || d <= 0) {
+		return fmt.Errorf("ANALYSIS_LEASE_TIMEOUT must be a positive duration, got %q", c.AnalysisLeaseTimeout)
+	}
+	if c.AnalysisTimeout != "" && c.AnalysisLeaseTimeout != "" {
+		analysisTimeout, analysisErr := time.ParseDuration(c.AnalysisTimeout)
+		leaseTimeout, leaseErr := time.ParseDuration(c.AnalysisLeaseTimeout)
+		if analysisErr == nil && leaseErr == nil && leaseTimeout <= analysisTimeout {
+			return fmt.Errorf("ANALYSIS_LEASE_TIMEOUT must exceed ANALYSIS_TIMEOUT")
+		}
 	}
 
 	validLogLevels := map[string]bool{

@@ -53,9 +53,11 @@ func main() {
 
 	// Setup routes
 	mux := http.NewServeMux()
+	metrics := api.NewMetrics()
 
 	// Health check
 	mux.HandleFunc("/health", handlers.HealthHandler)
+	mux.Handle("/metrics", metrics)
 
 	// API v1 routes
 	mux.HandleFunc("/api/v1/stats", handlers.StatsHandler)
@@ -80,7 +82,7 @@ func main() {
 	mux.HandleFunc("/api/v1/labels/auto-label-all", handlers.AutoLabelAllHandler)
 
 	// Apply middleware
-	handler := api.LoggingMiddleware(log)(api.CORSMiddleware(mux))
+	handler := api.RequestIDMiddleware(api.LoggingMiddleware(log)(api.MetricsMiddleware(metrics)(api.CORSMiddlewareWithOrigins(cfg.CORSOrigins)(mux))))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -128,8 +130,8 @@ func routeTrackByID(handlers *api.Handlers) http.HandlerFunc {
 		// Check if this is /api/v1/tracks/:id or /api/v1/tracks/search or /api/v1/tracks/failed
 		path := strings.TrimPrefix(r.URL.Path, "/api/v1/tracks/")
 
-		// If path is empty or has query params, it's the list endpoint
-		if path == "" || r.URL.RawQuery != "" {
+		// Query parameters do not change resource routing (e.g. /42/similar?n=10).
+		if path == "" {
 			handlers.ListTracksHandler(w, r)
 			return
 		}

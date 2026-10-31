@@ -72,19 +72,19 @@ func scanMP3Files(musicDir string, shallow bool) ([]string, error) {
 // Returns the number of newly imported tracks.
 func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string, shallowScan bool) (int, error) {
 	// Get all existing file paths from database
-	existingPaths := make(map[string]bool)
-	rows, err := db.pool.Query(ctx, "SELECT file_path FROM tracks")
+	existingPaths := make(map[string]string)
+	rows, err := db.pool.Query(ctx, "SELECT file_path, analysis_status FROM tracks")
 	if err != nil {
 		return 0, fmt.Errorf("failed to query existing tracks: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
+		var path, status string
+		if err := rows.Scan(&path, &status); err != nil {
 			return 0, fmt.Errorf("failed to scan path: %w", err)
 		}
-		existingPaths[path] = true
+		existingPaths[path] = status
 	}
 
 	allFiles, err := scanMP3Files(musicDir, shallowScan)
@@ -96,7 +96,21 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string, shall
 	var newFiles []string
 	for _, filePath := range allFiles {
 		relPath, _ := filepath.Rel(musicDir, filePath)
-		if !existingPaths[relPath] && !existingPaths[filePath] && !existingPaths[filepath.Base(filePath)] {
+		knownPath := relPath
+		if _, ok := existingPaths[knownPath]; !ok {
+			knownPath = filePath
+		}
+		if _, ok := existingPaths[knownPath]; !ok {
+			knownPath = filepath.Base(filePath)
+		}
+		if status, exists := existingPaths[knownPath]; exists {
+			if status == "missing" {
+				if _, err := db.pool.Exec(ctx, `UPDATE tracks SET analysis_status='pending', analysis_error=NULL, analysis_started_at=NULL, next_retry_at=NULL, analyzed_at=NULL WHERE file_path=$1 AND analysis_status='missing'`, knownPath); err != nil {
+					return 0, fmt.Errorf("restore reappeared track %s: %w", knownPath, err)
+				}
+				existingPaths[knownPath] = "pending"
+			}
+		} else {
 			newFiles = append(newFiles, filePath)
 		}
 	}
@@ -112,11 +126,11 @@ func (db *DB) ScanAndImportNewTracks(ctx context.Context, musicDir string, shall
 			VALUES ($1, $2, 'pending', NOW())
 			ON CONFLICT (file_path) DO NOTHING
 		`
-		_, err := db.pool.Exec(ctx, query, relPath, fileName)
+		result, err := db.pool.Exec(ctx, query, relPath, fileName)
 		if err != nil {
 			return imported, fmt.Errorf("failed to insert track: %w", err)
 		}
-		imported++
+		imported += int(result.RowsAffected())
 	}
 
 	return imported, nil

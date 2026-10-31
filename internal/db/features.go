@@ -8,7 +8,7 @@ import (
 
 // AudioFeatures represents audio analysis results
 type AudioFeatures struct {
-	TrackID         int     `json:"track_id"`
+	TrackID         int      `json:"track_id"`
 	BPM             *float64 `json:"bpm"`
 	Key             *string  `json:"key"`
 	Mode            *string  `json:"mode"`
@@ -199,9 +199,16 @@ func (db *DB) UpdateTrackStatus(ctx context.Context, trackID int, status string,
 
 	query := `
 		UPDATE tracks
-		SET analysis_status = $1,
+		SET analysis_status = $1::text,
 		    analysis_error = $2,
-		    analyzed_at = COALESCE($3, analyzed_at)
+		    analyzed_at = COALESCE($3, analyzed_at),
+		    analysis_duration_seconds = CASE
+		        WHEN $1::text = 'analyzing' THEN NULL
+		        WHEN $1::text = 'completed' AND analysis_started_at IS NOT NULL THEN EXTRACT(EPOCH FROM NOW() - analysis_started_at)
+		        ELSE analysis_duration_seconds
+		    END,
+		    analysis_started_at = CASE WHEN $1::text = 'analyzing' THEN analysis_started_at ELSE NULL END,
+		    next_retry_at = CASE WHEN $1::text = 'pending' THEN next_retry_at ELSE NULL END
 		WHERE id = $4`
 
 	_, err := db.pool.Exec(ctx, query, status, errorMsg, analyzedAt, trackID)

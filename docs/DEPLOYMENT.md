@@ -41,7 +41,7 @@ docker-compose -f docker-compose.prod.yml logs -f worker
 │                            ▼                                 │
 │                    ┌──────────────┐                         │
 │                    │  NAS/Music   │                         │
-│                    │  (9,875 MP3) │                         │
+│                    │ music library│                         │
 │                    └──────────────┘                         │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
@@ -227,7 +227,7 @@ nano .env
 POSTGRES_PASSWORD=your_secure_password_here
 POSTGRES_USER=doyou
 POSTGRES_DB=doyou_music
-POSTGRES_PORT=5432
+POSTGRES_PORT=5432 # Host port is bound to 127.0.0.1 by Compose
 
 # NAS Path (CRITICAL - adjust to your setup)
 NAS_MUSIC_PATH=/Volumes/Expansion/ExtHDD-8TB/Music/doyou-world-radio-tracks
@@ -237,8 +237,9 @@ BATCH_SIZE=10           # Process 10 tracks at a time
 MAX_WORKERS=4           # 4 parallel analyzers
 ANALYSIS_TIMEOUT=90s    # 90 seconds per track
 
-# API
+# API (host-published port is bound to 127.0.0.1)
 API_PORT=8080
+CORS_ORIGINS=https://your-dashboard.example
 
 # Logging
 LOG_LEVEL=info
@@ -280,12 +281,9 @@ docker-compose -f docker-compose.prod.yml logs -f api
 
 > **Note:** Watchtower is already running on your Mac mini - no need to start it separately.
 
-### 6. Run Initial Migration
+### 6. Database migrations
 
-```bash
-# Run database migrations
-docker-compose -f docker-compose.prod.yml exec postgres psql -U doyou -d doyou_music -f /docker-entrypoint-initdb.d/001_initial_schema.up.sql
-```
+The API applies ordered embedded migrations during startup under a PostgreSQL advisory lock. Do not mount `migrations/` into `/docker-entrypoint-initdb.d` or manually replay SQL files. Existing databases created by the older init-script deployment are adopted when their migration objects are detected; verify the API logs report migrations up to date before starting the worker.
 
 ### 7. Import MP3 Files to Database
 

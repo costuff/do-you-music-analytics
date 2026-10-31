@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func TestGetTrackStats(t *testing.T) {
 		t.Fatalf("GetTrackStats() error = %v", err)
 	}
 
-	keys := []string{"total", "pending", "analyzing", "completed", "failed"}
+	keys := []string{"total", "pending", "analyzing", "completed", "failed", "missing"}
 	for _, key := range keys {
 		if _, ok := stats[key]; !ok {
 			t.Errorf("missing key %q", key)
@@ -85,6 +86,73 @@ func TestUpdateTrackStatus(t *testing.T) {
 	err = db.UpdateTrackStatus(ctx, id, "completed", nil)
 	if err != nil {
 		t.Errorf("UpdateTrackStatus() error = %v", err)
+	}
+}
+
+func TestScheduleTrackRetryAndExhaustion(t *testing.T) {
+	database := getDB(t)
+	if database == nil {
+		return
+	}
+	defer database.Close()
+	ctx := context.Background()
+	id, err := database.CreateTrack(ctx, filepath.Join(t.TempDir(), "retry.mp3"), "retry.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Pool().Exec(ctx, "DELETE FROM tracks WHERE id = $1", id)
+
+	if _, err := database.Pool().Exec(ctx, `UPDATE tracks SET analysis_status='analyzing', analysis_attempts=1, analysis_started_at=NOW() WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	status, err := database.ScheduleTrackRetry(ctx, id, 2, time.Hour, "temporary analyzer failure")
+	if err != nil || status != "pending" {
+		t.Fatalf("first retry status=%q err=%v", status, err)
+	}
+	var attempts int
+	if err := database.Pool().QueryRow(ctx, "SELECT analysis_attempts FROM tracks WHERE id=$1", id).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d, want 1", attempts)
+	}
+	if _, err := database.Pool().Exec(ctx, "UPDATE tracks SET next_retry_at=NOW() WHERE id=$1", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Pool().Exec(ctx, `UPDATE tracks SET analysis_status='analyzing', analysis_attempts=2, analysis_started_at=NOW(), next_retry_at=NULL WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	status, err = database.ScheduleTrackRetry(ctx, id, 2, time.Hour, "still failing")
+	if err != nil || status != "failed" {
+		t.Fatalf("exhausted retry status=%q err=%v", status, err)
+	}
+}
+
+func TestRecoverStaleAnalysisClaim(t *testing.T) {
+	database := getDB(t)
+	if database == nil {
+		return
+	}
+	defer database.Close()
+	ctx := context.Background()
+	id, err := database.CreateTrack(ctx, filepath.Join(t.TempDir(), "stale.mp3"), "stale.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Pool().Exec(ctx, "DELETE FROM tracks WHERE id = $1", id)
+	if _, err := database.Pool().Exec(ctx, `UPDATE tracks SET analysis_status='analyzing', analysis_attempts=1, analysis_started_at=NOW()-INTERVAL '1 hour' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := database.RecoverStaleAnalysis(ctx, time.Minute, 5, time.Second)
+	if err != nil || recovered < 1 {
+		t.Fatalf("recovered=%d err=%v", recovered, err)
+	}
+	var status string
+	if err := database.Pool().QueryRow(ctx, "SELECT analysis_status FROM tracks WHERE id=$1", id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("status=%q, want pending", status)
 	}
 }
 

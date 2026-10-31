@@ -18,6 +18,7 @@ import (
 
 // mockTrackStore implements TrackStore for testing.
 type mockTrackStore struct {
+	pingFunc                     func(ctx context.Context) error
 	getTrackStatsFunc            func(ctx context.Context) (map[string]int64, error)
 	listTracksFunc               func(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
 	getTrackByIDFunc             func(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
@@ -40,6 +41,13 @@ type mockTrackStore struct {
 	getLabelsByPathFunc          func(ctx context.Context, path []string) ([]db.TrackLabel, error)
 	autoLabelTrackFunc           func(ctx context.Context, trackID int64) (*db.TrackLabel, error)
 	autoLabelAllFunc             func(ctx context.Context) (int, error)
+}
+
+func (m *mockTrackStore) Ping(ctx context.Context) error {
+	if m.pingFunc != nil {
+		return m.pingFunc(ctx)
+	}
+	return nil
 }
 
 func (m *mockTrackStore) GetTrackStats(ctx context.Context) (map[string]int64, error) {
@@ -168,7 +176,7 @@ func newTestHandlers(store TrackStore) *Handlers {
 // ---- HealthHandler ----
 
 func TestHealthHandler(t *testing.T) {
-	h := newTestHandlers(nil)
+	h := newTestHandlers(&mockTrackStore{})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -193,6 +201,15 @@ func TestHealthHandler(t *testing.T) {
 	}
 	if w.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", w.Header().Get("Content-Type"))
+	}
+}
+
+func TestHealthHandler_DatabaseUnavailable(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{pingFunc: func(context.Context) error { return errors.New("database offline") }})
+	w := httptest.NewRecorder()
+	h.HealthHandler(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
 	}
 }
 
@@ -324,9 +341,35 @@ func TestListTracksHandler_InvalidLimit_UsesDefault(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ListTracksHandler(w, req)
 
-	// limit > 200 should fall back to default (50)
+	// Limits above the API maximum fall back to the safe default (50).
 	if capturedLimit != 50 {
 		t.Errorf("limit = %d, want 50 (default enforced for >200)", capturedLimit)
+	}
+}
+
+func TestGetSimilarTracksHandler_QueryParameterAndLimit(t *testing.T) {
+	var gotTrackID int64
+	var gotLimit int
+	store := &mockTrackStore{getSimilarTracksFunc: func(_ context.Context, trackID int64, n int) ([]db.TrackSimilarityResult, error) {
+		gotTrackID, gotLimit = trackID, n
+		return []db.TrackSimilarityResult{}, nil
+	}}
+	h := newTestHandlers(store)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/42/similar?n=15", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarTracksHandler(w, req)
+	if w.Code != http.StatusOK || gotTrackID != 42 || gotLimit != 15 {
+		t.Fatalf("status=%d trackID=%d limit=%d", w.Code, gotTrackID, gotLimit)
+	}
+}
+
+func TestGetSimilarTracksHandler_RejectsExcessiveLimit(t *testing.T) {
+	h := newTestHandlers(&mockTrackStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/42/similar?n=101", nil)
+	w := httptest.NewRecorder()
+	h.GetSimilarTracksHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -584,8 +627,8 @@ func TestDetailedStatsHandler_Success(t *testing.T) {
 		},
 		getRecentCompletedTracksFunc: func(ctx context.Context, limit int) ([]db.TrackWithFeatures, error) {
 			return []db.TrackWithFeatures{
-				{ID: 1, AnalyzedAt: &now, DownloadedAt: &now},
-				{ID: 2, AnalyzedAt: &now, DownloadedAt: &now},
+				{ID: 1, AnalyzedAt: &now, DownloadedAt: &now, AnalysisDurationSeconds: float64Ptr(2)},
+				{ID: 2, AnalyzedAt: &now, DownloadedAt: &now, AnalysisDurationSeconds: float64Ptr(4)},
 			}, nil
 		},
 	}
@@ -611,7 +654,12 @@ func TestDetailedStatsHandler_Success(t *testing.T) {
 	if pct, ok := resp["completion_percentage"].(string); !ok || pct != "45.00" {
 		t.Errorf("completion_percentage = %v, want 45.00", resp["completion_percentage"])
 	}
+	if duration, ok := resp["avg_processing_time_sec"].(string); !ok || duration != "3.00" {
+		t.Errorf("avg_processing_time_sec = %v, want 3.00", resp["avg_processing_time_sec"])
+	}
 }
+
+func float64Ptr(value float64) *float64 { return &value }
 
 func TestDetailedStatsHandler_ZeroTotal(t *testing.T) {
 	store := &mockTrackStore{
@@ -979,7 +1027,6 @@ func TestGetSimilarTracksHandler_Success(t *testing.T) {
 	h := newTestHandlers(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/1/similar", nil)
-	req = req // path is parsed by handler from URL
 	w := httptest.NewRecorder()
 	h.GetSimilarTracksHandler(w, req)
 

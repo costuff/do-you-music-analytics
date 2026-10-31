@@ -7,20 +7,22 @@ import (
 )
 
 type Track struct {
-	ID             int
-	FilePath       string
-	AnalysisStatus string
+	ID               int
+	FilePath         string
+	AnalysisStatus   string
+	AnalysisAttempts int
 }
 
 // TrackWithFeatures represents a track with its audio features
 type TrackWithFeatures struct {
-	ID             int64      `json:"id"`
-	FilePath       string     `json:"file_path"`
-	FileName       string     `json:"file_name"`
-	AnalysisStatus string     `json:"analysis_status"`
-	AnalysisError  *string    `json:"analysis_error,omitempty"`
-	DownloadedAt   *time.Time `json:"downloaded_at"`
-	AnalyzedAt     *time.Time `json:"analyzed_at,omitempty"`
+	ID                      int64      `json:"id"`
+	FilePath                string     `json:"file_path"`
+	FileName                string     `json:"file_name"`
+	AnalysisStatus          string     `json:"analysis_status"`
+	AnalysisError           *string    `json:"analysis_error,omitempty"`
+	DownloadedAt            *time.Time `json:"downloaded_at"`
+	AnalyzedAt              *time.Time `json:"analyzed_at,omitempty"`
+	AnalysisDurationSeconds *float64   `json:"analysis_duration_seconds,omitempty"`
 
 	// Audio features (will be null if not analyzed yet)
 	Features *AudioFeatures `json:"features,omitempty"`
@@ -33,12 +35,13 @@ func (db *DB) GetTrackStats(ctx context.Context) (map[string]int64, error) {
 			COUNT(*) FILTER (WHERE analysis_status = 'pending') as pending,
 			COUNT(*) FILTER (WHERE analysis_status = 'analyzing') as analyzing,
 			COUNT(*) FILTER (WHERE analysis_status = 'completed') as completed,
-			COUNT(*) FILTER (WHERE analysis_status = 'failed') as failed
+			COUNT(*) FILTER (WHERE analysis_status = 'failed') as failed,
+			COUNT(*) FILTER (WHERE analysis_status = 'missing') as missing
 		FROM tracks
 	`
 
-	var total, pending, analyzing, completed, failed int64
-	err := db.pool.QueryRow(ctx, query).Scan(&total, &pending, &analyzing, &completed, &failed)
+	var total, pending, analyzing, completed, failed, missing int64
+	err := db.pool.QueryRow(ctx, query).Scan(&total, &pending, &analyzing, &completed, &failed, &missing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get track stats: %w", err)
 	}
@@ -49,6 +52,7 @@ func (db *DB) GetTrackStats(ctx context.Context) (map[string]int64, error) {
 		"analyzing": analyzing,
 		"completed": completed,
 		"failed":    failed,
+		"missing":   missing,
 	}
 
 	return stats, nil
@@ -61,6 +65,7 @@ func (db *DB) GetPendingTracks(ctx context.Context, limit int) ([]*Track, error)
 		SELECT id, file_path, analysis_status
 		FROM tracks
 		WHERE analysis_status = 'pending'
+		  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		ORDER BY downloaded_at ASC
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
@@ -95,16 +100,17 @@ func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
 
 	// Get one pending track with row-level lock
 	query := `
-		SELECT id, file_path, analysis_status
+		SELECT id, file_path, analysis_status, analysis_attempts
 		FROM tracks
 		WHERE analysis_status = 'pending'
+		  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 		ORDER BY downloaded_at ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`
 
 	var track Track
-	err = tx.QueryRow(ctx, query).Scan(&track.ID, &track.FilePath, &track.AnalysisStatus)
+	err = tx.QueryRow(ctx, query).Scan(&track.ID, &track.FilePath, &track.AnalysisStatus, &track.AnalysisAttempts)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
 			return nil, nil // No pending tracks available
@@ -115,7 +121,10 @@ func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
 	// Update status to 'analyzing' in same transaction
 	updateQuery := `
 		UPDATE tracks 
-		SET analysis_status = 'analyzing'
+		SET analysis_status = 'analyzing',
+		    analysis_attempts = analysis_attempts + 1,
+		    analysis_started_at = NOW(),
+		    next_retry_at = NULL
 		WHERE id = $1
 	`
 	_, err = tx.Exec(ctx, updateQuery, track.ID)
@@ -128,7 +137,63 @@ func (db *DB) ClaimPendingTrack(ctx context.Context) (*Track, error) {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	track.AnalysisAttempts++
 	return &track, nil
+}
+
+// ScheduleTrackRetry returns failed work to the pending queue with capped exponential backoff.
+// The initial claim counts as attempt one; maxAttempts includes that first attempt.
+func (db *DB) ScheduleTrackRetry(ctx context.Context, trackID, maxAttempts int, baseDelay time.Duration, message string) (string, error) {
+	const query = `
+		UPDATE tracks
+		SET analysis_status = CASE WHEN analysis_attempts >= $2 THEN 'failed' ELSE 'pending' END,
+		    analysis_error = $3,
+		    analysis_started_at = NULL,
+		    next_retry_at = CASE
+		        WHEN analysis_attempts >= $2 THEN NULL
+		        ELSE NOW() + ($4::interval * LEAST(POWER(2, GREATEST(analysis_attempts - 1, 0)), 64))
+		    END
+		WHERE id = $1 AND analysis_status = 'analyzing'
+		RETURNING analysis_status`
+	var status string
+	if err := db.pool.QueryRow(ctx, query, trackID, maxAttempts, message, baseDelay.String()).Scan(&status); err != nil {
+		return "", fmt.Errorf("schedule retry for track %d: %w", trackID, err)
+	}
+	return status, nil
+}
+
+// RecoverStaleAnalysis releases claims abandoned by a process restart. Attempts at the configured
+// limit are marked failed; all other claims return to pending with the normal retry backoff.
+func (db *DB) RecoverStaleAnalysis(ctx context.Context, staleAfter time.Duration, maxAttempts int, baseDelay time.Duration) (int64, error) {
+	const query = `
+		UPDATE tracks
+		SET analysis_status = CASE WHEN analysis_attempts >= $2 THEN 'failed' ELSE 'pending' END,
+		    analysis_error = 'analysis claim expired before completion',
+		    analysis_started_at = NULL,
+		    next_retry_at = CASE
+		        WHEN analysis_attempts >= $2 THEN NULL
+		        ELSE NOW() + ($3::interval * LEAST(POWER(2, GREATEST(analysis_attempts - 1, 0)), 64))
+		    END
+		WHERE analysis_status = 'analyzing'
+		  AND (analysis_started_at IS NULL OR analysis_started_at < NOW() - $1::interval)`
+	result, err := db.pool.Exec(ctx, query, staleAfter.String(), maxAttempts, baseDelay.String())
+	if err != nil {
+		return 0, fmt.Errorf("recover stale analysis claims: %w", err)
+	}
+	return result.RowsAffected(), nil
+}
+
+// ReleaseAnalysisClaim returns a claim interrupted by service shutdown to the queue immediately.
+func (db *DB) ReleaseAnalysisClaim(ctx context.Context, trackID int) error {
+	_, err := db.pool.Exec(ctx, `
+		UPDATE tracks
+		SET analysis_status = 'pending', analysis_error = NULL,
+		    analysis_started_at = NULL, next_retry_at = NOW()
+		WHERE id = $1 AND analysis_status = 'analyzing'`, trackID)
+	if err != nil {
+		return fmt.Errorf("release analysis claim for track %d: %w", trackID, err)
+	}
+	return nil
 }
 
 // ListTracks returns paginated list of tracks with optional status filter
@@ -301,7 +366,7 @@ func (db *DB) SearchTracks(ctx context.Context, query string, limit int) ([]Trac
 func (db *DB) GetFailedTracks(ctx context.Context, limit int) ([]TrackWithFeatures, error) {
 	query := `
 		SELECT id, file_path, file_name, analysis_status, analysis_error,
-		       downloaded_at, analyzed_at
+		       downloaded_at, analyzed_at, analysis_duration_seconds
 		FROM tracks
 		WHERE analysis_status = 'failed'
 		ORDER BY analyzed_at DESC
@@ -319,7 +384,7 @@ func (db *DB) GetFailedTracks(ctx context.Context, limit int) ([]TrackWithFeatur
 		var track TrackWithFeatures
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
-			&track.DownloadedAt, &track.AnalyzedAt,
+			&track.DownloadedAt, &track.AnalyzedAt, &track.AnalysisDurationSeconds,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
@@ -334,7 +399,7 @@ func (db *DB) GetFailedTracks(ctx context.Context, limit int) ([]TrackWithFeatur
 func (db *DB) GetRecentCompletedTracks(ctx context.Context, limit int) ([]TrackWithFeatures, error) {
 	query := `
 		SELECT id, file_path, file_name, analysis_status, analysis_error,
-		       downloaded_at, analyzed_at
+		       downloaded_at, analyzed_at, analysis_duration_seconds
 		FROM tracks
 		WHERE analysis_status = 'completed' AND analyzed_at IS NOT NULL
 		ORDER BY analyzed_at DESC
@@ -352,7 +417,7 @@ func (db *DB) GetRecentCompletedTracks(ctx context.Context, limit int) ([]TrackW
 		var track TrackWithFeatures
 		err := rows.Scan(
 			&track.ID, &track.FilePath, &track.FileName, &track.AnalysisStatus, &track.AnalysisError,
-			&track.DownloadedAt, &track.AnalyzedAt,
+			&track.DownloadedAt, &track.AnalyzedAt, &track.AnalysisDurationSeconds,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)

@@ -17,6 +17,7 @@ import (
 
 // TrackStore defines the database operations required by the API handlers.
 type TrackStore interface {
+	Ping(ctx context.Context) error
 	GetTrackStats(ctx context.Context) (map[string]int64, error)
 	ListTracks(ctx context.Context, limit, offset int, status string) ([]db.TrackWithFeatures, int64, error)
 	GetTrackByID(ctx context.Context, trackID int64) (*db.TrackWithFeatures, error)
@@ -55,6 +56,12 @@ func NewHandlers(database TrackStore, log *logger.Logger, version string) *Handl
 }
 
 func (h *Handlers) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := h.db.Ping(ctx); err != nil {
+		JSONError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "healthy",
 		"version":   h.version,
@@ -73,6 +80,7 @@ func (h *Handlers) StatsHandler(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"total": stats["total"], "pending": stats["pending"],
 		"analyzing": stats["analyzing"], "completed": stats["completed"], "failed": stats["failed"],
+		"missing": stats["missing"],
 	})
 }
 
@@ -82,7 +90,7 @@ func (h *Handlers) ListTracksHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 			limit = l
 		}
 	}
@@ -130,7 +138,7 @@ func (h *Handlers) SearchTracksHandler(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 			limit = l
 		}
 	}
@@ -147,7 +155,7 @@ func (h *Handlers) FailedTracksHandler(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 5000 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 			limit = l
 		}
 	}
@@ -202,7 +210,7 @@ func (h *Handlers) GetAllEmotionsHandler(w http.ResponseWriter, r *http.Request)
 	limit := 2000
 	offset := 0
 	if l := r.URL.Query().Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 2000 {
 			limit = v
 		}
 	}
@@ -242,16 +250,17 @@ func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	var avgProcessingTime float64
 	var tracksPerHour float64
-	if len(recentTracks) > 1 {
-		var totalDuration time.Duration
+	if len(recentTracks) > 0 {
+		var totalDuration float64
+		durationCount := 0
 		for _, track := range recentTracks {
-			if track.AnalyzedAt != nil && track.DownloadedAt != nil {
-				duration := track.AnalyzedAt.Sub(*track.DownloadedAt)
-				totalDuration += duration
+			if track.AnalysisDurationSeconds != nil {
+				totalDuration += *track.AnalysisDurationSeconds
+				durationCount++
 			}
 		}
-		if totalDuration > 0 {
-			avgProcessingTime = totalDuration.Seconds() / float64(len(recentTracks))
+		if durationCount > 0 {
+			avgProcessingTime = totalDuration / float64(durationCount)
 			if len(recentTracks) > 1 {
 				firstTime := recentTracks[len(recentTracks)-1].AnalyzedAt
 				lastTime := recentTracks[0].AnalyzedAt
@@ -271,6 +280,7 @@ func (h *Handlers) DetailedStatsHandler(w http.ResponseWriter, r *http.Request) 
 		"tracks_per_hour":         fmt.Sprintf("%.2f", tracksPerHour),
 		"completion_percentage":   "0.00",
 	}
+	response["missing"] = stats["missing"]
 	if stats["total"] > 0 {
 		completionPct := float64(stats["completed"]) / float64(stats["total"]) * 100
 		response["completion_percentage"] = fmt.Sprintf("%.2f", completionPct)
@@ -292,9 +302,12 @@ func (h *Handlers) GetSimilarTracksHandler(w http.ResponseWriter, r *http.Reques
 
 	n := 10
 	if q := r.URL.Query().Get("n"); q != "" {
-		if parsed, err := strconv.Atoi(q); err == nil && parsed > 0 {
-			n = parsed
+		parsed, err := strconv.Atoi(q)
+		if err != nil || parsed < 1 || parsed > 100 {
+			JSONError(w, http.StatusBadRequest, "n must be an integer between 1 and 100")
+			return
 		}
+		n = parsed
 	}
 
 	results, err := h.db.GetSimilarTracks(r.Context(), trackID, n)

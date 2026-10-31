@@ -77,6 +77,41 @@ func TestCORSMiddleware(t *testing.T) {
 	}
 }
 
+func TestCORSMiddlewareWithOrigins(t *testing.T) {
+	handler := CORSMiddlewareWithOrigins("https://music.example.com,http://localhost:5173")(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+	)
+
+	allowed := httptest.NewRequest(http.MethodGet, "/", nil)
+	allowed.Header.Set("Origin", "https://music.example.com")
+	allowedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(allowedResponse, allowed)
+	if got := allowedResponse.Header().Get("Access-Control-Allow-Origin"); got != "https://music.example.com" {
+		t.Fatalf("allowed origin header = %q", got)
+	}
+
+	denied := httptest.NewRequest(http.MethodOptions, "/", nil)
+	denied.Header.Set("Origin", "https://untrusted.example")
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, denied)
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("disallowed preflight status = %d, want 403", deniedResponse.Code)
+	}
+}
+
+func TestRequestIDMiddleware(t *testing.T) {
+	handler := RequestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(requestIDKey{}) == nil {
+			t.Error("request ID missing from context")
+		}
+	}))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Header().Get("X-Request-ID") == "" {
+		t.Fatal("X-Request-ID response header missing")
+	}
+}
+
 func TestLoggingMiddleware(t *testing.T) {
 	// Initialize logger for tests
 	log := logger.New("info")

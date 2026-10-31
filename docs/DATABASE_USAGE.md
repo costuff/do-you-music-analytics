@@ -244,6 +244,11 @@ else:
     print("Track not yet imported")
 ```
 
+## Integration with Scraper Service
+
+The scraper writes downloaded audio to the shared library; the analytics worker discovers tracks on its configured scan schedule. The scraper dashboard consumes analytics data through the HTTP API documented in [API_USAGE.md](API_USAGE.md). Keep direct PostgreSQL connections for analytics-service administration and isolated integration tests; the scraper does not own or mutate the analytics schema.
+
+Supported discovery and query endpoints are `GET /api/v1/stats`, `GET /api/v1/tracks`, `GET /api/v1/tracks/{id}`, `GET /api/v1/tracks/search?q=...`, emotion endpoints, and `GET /api/v1/tracks/{id}/similar?n=...`. Feature-range filters and a separate `/features` route are not currently part of the API.
 ### Manual Track Import (If Needed)
 
 If the scraper needs to immediately trigger import/analysis:
