@@ -9,7 +9,7 @@ Host: localhost (or doyou-analytics-db from Docker network)
 Port: 5432
 Database: doyou_music
 User: doyou
-Password: REDACTED_ROTATED_CREDENTIAL
+Password: use the value configured in your local environment (never commit production credentials)
 ```
 
 ## Schema
@@ -177,6 +177,8 @@ GET http://localhost:8080/api/v1/tracks/{id}/features
 ### Direct Database Access from Scraper (Python)
 
 ```python
+import os
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -186,7 +188,7 @@ conn = psycopg2.connect(
     port=5432,
     database="doyou_music",
     user="doyou",
-    password="REDACTED_ROTATED_CREDENTIAL"
+    password=os.environ["POSTGRES_PASSWORD"]
 )
 
 # Query completed analyses
@@ -252,7 +254,7 @@ docker exec doyou-analytics-worker /app/import-tracks /mnt/music/downloads/doyou
 
 # Or from host:
 cd /Users/costasskoutelis/srv/do-you-music-analytics
-DATABASE_URL="postgresql://doyou:REDACTED_ROTATED_CREDENTIAL@localhost:5432/doyou_music" \
+DATABASE_URL="postgresql://doyou:${POSTGRES_PASSWORD}@localhost:5432/doyou_music" \
 VALIDATE_NAS_ON_STARTUP=false \
 go run cmd/import-tracks/main.go /Volumes/ExtHDD-8TB/Music/doyou-world-radio-tracks
 ```

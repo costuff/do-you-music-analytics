@@ -191,7 +191,7 @@ const pool = new pg.Pool({
   port: 5432,
   database: 'doyou_music',
   user: 'doyou',
-  password: 'REDACTED_ROTATED_CREDENTIAL'
+  password: process.env.POSTGRES_PASSWORD
 });
 
 // Get statistics

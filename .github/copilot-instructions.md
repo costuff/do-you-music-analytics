@@ -196,7 +196,7 @@ Host: localhost (or doyou-analytics-db from Docker network)
 Port: 5432
 Database: doyou_music
 User: doyou
-Password: REDACTED_ROTATED_CREDENTIAL
+Password: use the value configured in your local environment (never commit production credentials)
 ```
 
 ### Common Queries for Scraper Integration
@@ -237,6 +237,8 @@ GROUP BY analysis_status;
 
 ### Python Integration Example (for Scraper)
 ```python
+import os
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -245,7 +247,7 @@ conn = psycopg2.connect(
     port=5432,
     database="doyou_music",
     user="doyou",
-    password="REDACTED_ROTATED_CREDENTIAL"
+    password=os.environ["POSTGRES_PASSWORD"]
 )
 
 # Get completed analyses

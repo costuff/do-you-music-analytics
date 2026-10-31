@@ -25,7 +25,7 @@ Use this when developing `doyou-music-analytics` and `doyou-world-scraper` toget
 In analytics `.env`:
 
 ```bash
-DATABASE_URL=postgres://doyou:REDACTED_ROTATED_CREDENTIAL@localhost:5432/doyou_music?sslmode=disable
+DATABASE_URL=postgres://doyou:${POSTGRES_PASSWORD}@localhost:5432/doyou_music?sslmode=disable
 API_PORT=8080
 CORS_ORIGINS=http://localhost:5173
 
