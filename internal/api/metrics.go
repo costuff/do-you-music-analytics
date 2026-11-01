@@ -11,11 +11,11 @@ import (
 
 // Metrics records bounded-cardinality HTTP request counters and duration totals.
 type Metrics struct {
-	mu             sync.Mutex
-	requests       map[requestLabel]uint64
-	requestCount   atomic.Uint64
-	durationNanos  atomic.Uint64
-	inFlight       atomic.Int64
+	mu            sync.Mutex
+	requests      map[requestLabel]uint64
+	requestCount  atomic.Uint64
+	durationNanos atomic.Uint64
+	inFlight      atomic.Int64
 }
 
 type requestLabel struct {

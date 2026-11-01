@@ -57,15 +57,15 @@ func TestAudioFeatures_JSONSerialization(t *testing.T) {
 
 	// Verify values match
 	if decoded.BPM == nil || original.BPM == nil || *decoded.BPM != *original.BPM {
-		t.Errorf("BPM mismatch: got %v, want %v", 
+		t.Errorf("BPM mismatch: got %v, want %v",
 			ptrToValue(decoded.BPM), ptrToValue(original.BPM))
 	}
 	if decoded.Key == nil || original.Key == nil || *decoded.Key != *original.Key {
-		t.Errorf("Key mismatch: got %v, want %v", 
+		t.Errorf("Key mismatch: got %v, want %v",
 			ptrToString(decoded.Key), ptrToString(original.Key))
 	}
 	if decoded.Energy == nil || original.Energy == nil || *decoded.Energy != *original.Energy {
-		t.Errorf("Energy mismatch: got %v, want %v", 
+		t.Errorf("Energy mismatch: got %v, want %v",
 			ptrToValue(decoded.Energy), ptrToValue(original.Energy))
 	}
 }
